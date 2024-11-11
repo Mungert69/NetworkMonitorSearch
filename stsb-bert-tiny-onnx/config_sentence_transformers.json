@@ -1,0 +1,10 @@
+{
+  "__version__": {
+    "sentence_transformers": "3.2.0.dev0",
+    "transformers": "4.43.4",
+    "pytorch": "2.5.0.dev20240807+cu121"
+  },
+  "prompts": {},
+  "default_prompt_name": null,
+  "similarity_fn_name": null
+}
