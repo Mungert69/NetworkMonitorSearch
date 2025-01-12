@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("NetworkMonitorSearch")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+bf0e7773f4ba7126e90b4cd8f5631b1a69527256")]
 [assembly: System.Reflection.AssemblyProductAttribute("NetworkMonitorSearch")]
 [assembly: System.Reflection.AssemblyTitleAttribute("NetworkMonitorSearch")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
