@@ -354,3 +354,5 @@ nohup.out
 /data/*
 /.mono
 appsettings*
+.cache
+venv
