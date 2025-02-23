@@ -3,7 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
-
+using NetworkMonitor.Search.Services;
+namespace NetworkMonitor.Search;
 public class Program
 {
     public static async Task Main(string[] args)
@@ -24,7 +25,7 @@ public class Program
         Console.WriteLine("JSON deserialization succeeded. Proceeding with indexing.");
 
         // Ensure the OpenSearch index exists
-        await openSearchHelper.EnsureIndexExistsAsync();
+        await openSearchHelper.EnsureIndexExistsAsync(recreateIndex : true);
 
         // Index documents in OpenSearch
         await openSearchHelper.IndexDocumentsAsync(documents);

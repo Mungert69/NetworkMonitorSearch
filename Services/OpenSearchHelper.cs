@@ -9,13 +9,13 @@ using System.Threading.Tasks;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using OpenSearch.Net;
-
+namespace NetworkMonitor.Search.Services;
 public class Document
 {
-    public string Instruction { get; set; } // This field is optional; add if needed
-    public string Input { get; set; }       // The query text
-    public string Output { get; set; }      // The response text
-    public List<float> Embedding { get; set; }  // Precomputed embedding
+    public string Instruction { get; set; } ="";
+    public string Input { get; set; } ="";
+    public string Output { get; set; } ="";
+    public List<float> Embedding { get; set; } = new ();
 }
 public class OpenSearchHelper
 {

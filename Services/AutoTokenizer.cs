@@ -6,11 +6,11 @@ using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-
+namespace NetworkMonitor.Search.Services;
 public class SpecialToken
 {
     [JsonProperty("content")]
-    public string Content { get; set; }
+    public string Content { get; set; } ="";
 
     [JsonProperty("lstrip")]
     public bool Lstrip { get; set; }
@@ -36,14 +36,14 @@ public class AutoTokenizer
     {
         // Load tokenizer configuration
         var tokenizerConfigPath = Path.Combine(modelDir, "tokenizer_config.json");
-        var tokenizerConfig = JsonConvert.DeserializeObject<JObject>(File.ReadAllText(tokenizerConfigPath));
+        var tokenizerConfig = JsonConvert.DeserializeObject<JObject>(File.ReadAllText(tokenizerConfigPath)) ?? new ();
 
-        _maxLength = tokenizerConfig["model_max_length"]?.Value<int>() ?? 128;
-        _doLowerCase = tokenizerConfig["do_lower_case"]?.Value<bool>() ?? false;
+        _maxLength = tokenizerConfig["model_max_length"]?.Value<int>() ?? 512;
+        _doLowerCase = tokenizerConfig["do_lower_case"]?.Value<bool>() ?? true;
 
         // Load special tokens
         var specialTokensPath = Path.Combine(modelDir, "special_tokens_map.json");
-        var specialTokenObjects = JsonConvert.DeserializeObject<Dictionary<string, SpecialToken>>(File.ReadAllText(specialTokensPath));
+        var specialTokenObjects = JsonConvert.DeserializeObject<Dictionary<string, SpecialToken>>(File.ReadAllText(specialTokensPath)) ?? new ();
 
         // Extract the "content" field for each token
         _specialTokens = specialTokenObjects.ToDictionary(
@@ -114,7 +114,7 @@ public class AutoTokenizer
 
 public class TokenizedInput
 {
-    public List<long> InputIds { get; set; }
-    public List<long> AttentionMask { get; set; }
-    public List<long> TokenTypeIds { get; set; }
+    public List<long> InputIds { get; set; } = new ();
+    public List<long> AttentionMask { get; set; } = new ();
+    public List<long> TokenTypeIds { get; set; } = new ();
 }
