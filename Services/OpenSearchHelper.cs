@@ -9,13 +9,14 @@ using System.Threading.Tasks;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using OpenSearch.Net;
+using NetworkMonitor.Objects;
 namespace NetworkMonitor.Search.Services;
 public class Document
 {
-    public string Instruction { get; set; } ="";
-    public string Input { get; set; } ="";
-    public string Output { get; set; } ="";
-    public List<float> Embedding { get; set; } = new ();
+    public string Instruction { get; set; } = "";
+    public string Input { get; set; } = "";
+    public string Output { get; set; } = "";
+    public List<float> Embedding { get; set; } = new();
 }
 public class OpenSearchHelper
 {
@@ -84,15 +85,15 @@ public class OpenSearchHelper
     }
 
     // Method to search for similar documents using precomputed embeddings
-    public async Task SearchDocumentsAsync(string queryText, string indexName = "documents")
+    public async Task<SearchResponseObj> SearchDocumentsAsync(string queryText, string indexName = "documents")
     {
         // Generate embedding for the query text
         var queryEmbedding = GenerateEmbedding(queryText);
+        var searchResponse = new SearchResponseObj();
 
         if (queryEmbedding.Count == 0)
         {
-            Console.WriteLine("Failed to generate query embedding.");
-            return;
+            throw new Exception("Failed to generate query embedding.");
         }
 
         // Create an HttpClient instance for sending the request
@@ -115,9 +116,9 @@ public class OpenSearchHelper
             {
                 knn = new
                 {
-                    embedding = new  // Ensure this matches the field name in the index mapping
+                    embedding = new
                     {
-                        vector = queryEmbedding,  // Ensure this is a valid 128-dimensional vector
+                        vector = queryEmbedding,
                         k = 3
                     }
                 }
@@ -136,15 +137,19 @@ public class OpenSearchHelper
         {
             var responseBody = await response.Content.ReadAsStringAsync();
             Console.WriteLine("Search Results:");
-            Console.WriteLine(responseBody);  // Deserialize and process this JSON as needed
+            Console.WriteLine(responseBody);
+
+            // Deserialize the JSON response into the SearchResponse object
+            searchResponse = JsonConvert.DeserializeObject<SearchResponseObj>(responseBody);
+
         }
         else
         {
-            Console.WriteLine($"Search failed: {response.ReasonPhrase}");
+            throw new Exception($"Search failed: {response.ReasonPhrase}");
         }
+        return searchResponse;
     }
-
-    public async Task EnsureIndexExistsAsync(string indexName = "documents", bool recreateIndex = false)
+    public async Task EnsureIndexExistsAsync(string indexName = "documents", bool recreateIndex = false, int bertModelVecDim = 128)
     {
         if (recreateIndex)
         {
@@ -168,7 +173,7 @@ public class OpenSearchHelper
                         ""output"": { ""type"": ""text"" },
                         ""embedding"": { 
                             ""type"": ""knn_vector"", 
-                            ""dimension"": 128,
+                            ""dimension"": " + bertModelVecDim + @",
                             ""method"": {
                                 ""name"": ""hnsw"",
                                 ""space_type"": ""l2"",

@@ -6,13 +6,15 @@ using System.Threading.Tasks;
 using Newtonsoft.Json;
 using System.Text;
 using NetworkMonitor.Objects;
+using NetworkMonitor.Objects.Repository;
+using NetworkMonitor.Utils.Helpers;
 
-namespace NetworkMonitor.Scheduler.Services
+namespace NetworkMonitor.Search.Services
 {
     public interface IRabbitListener
     {
-        ResultObj CreateIndex(CreateIndexRequest createIndexRequest);
-        ResultObj QueryIndex(QueryIndexRequest queryIndexRequest);
+        Task<ResultObj> CreateIndex(CreateIndexRequest createIndexRequest);
+        Task<ResultObj> QueryIndex(QueryIndexRequest queryIndexRequest);
         Task Shutdown();
         Task<ResultObj> Setup();
     }
@@ -56,35 +58,49 @@ namespace NetworkMonitor.Scheduler.Services
             {
                 foreach (var rabbitMQObj in _rabbitMQObjs)
                 {
-                    rabbitMQObj.Consumer = new AsyncEventingBasicConsumer(rabbitMQObj.ConnectChannel);
                     if (rabbitMQObj.ConnectChannel != null)
                     {
-                        await rabbitMQObj.ConnectChannel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
+                        rabbitMQObj.Consumer = new AsyncEventingBasicConsumer(rabbitMQObj.ConnectChannel);
 
                         switch (rabbitMQObj.FuncName)
                         {
                             case "createIndex":
-                                rabbitMQObj.Consumer.Received += async (model, ea) =>
+                                await rabbitMQObj.ConnectChannel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
+                                rabbitMQObj.Consumer.ReceivedAsync += async (model, ea) =>
+                            {
+                                try
                                 {
-                                    var createIndexRequest = ConvertToObject<CreateIndexRequest>(model, ea);
-                                    result = CreateIndex(createIndexRequest);
-                                    await rabbitMQObj.ConnectChannel.BasicAckAsync(ea.DeliveryTag, false);
-                                };
-                                break;
 
-                            case "queryIndex":
-                                rabbitMQObj.Consumer.Received += async (model, ea) =>
-                                {
-                                    var queryIndexRequest = ConvertToObject<QueryIndexRequest>(model, ea);
-                                    result = QueryIndex(queryIndexRequest);
+                                    result = await CreateIndex(ConvertToObject<CreateIndexRequest>(model, ea));
                                     await rabbitMQObj.ConnectChannel.BasicAckAsync(ea.DeliveryTag, false);
-                                };
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogError(" Error : RabbitListener.DeclareConsumers.createIndex " + ex.Message);
+                                }
+                            };
+                                break;
+                            case "queryIndex":
+                                await rabbitMQObj.ConnectChannel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
+                                rabbitMQObj.Consumer.ReceivedAsync += async (model, ea) =>
+                            {
+                                try
+                                {
+
+                                    result = await QueryIndex(ConvertToObject<QueryIndexRequest>(model, ea));
+                                    await rabbitMQObj.ConnectChannel.BasicAckAsync(ea.DeliveryTag, false);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogError(" Error : RabbitListener.DeclareConsumers.queryIndex " + ex.Message);
+                                }
+                            };
                                 break;
                         }
 
-                        await rabbitMQObj.ConnectChannel.BasicConsumeAsync(queue: rabbitMQObj.ExchangeName, autoAck: false, consumer: rabbitMQObj.Consumer);
                     }
                 }
+
                 result.Success = true;
                 result.Message = "Success: Declared all consumers.";
             }
@@ -96,7 +112,7 @@ namespace NetworkMonitor.Scheduler.Services
             return result;
         }
 
-        public ResultObj CreateIndex(CreateIndexRequest createIndexRequest)
+        public async Task<ResultObj> CreateIndex(CreateIndexRequest createIndexRequest)
         {
             var result = new ResultObj();
             result.Success = false;
@@ -111,7 +127,7 @@ namespace NetworkMonitor.Scheduler.Services
             try
             {
                 // Call the OpenSearch service to create the index
-                var createIndexResult = _openSearchService.CreateIndexAsync(createIndexRequest).Result;
+                var createIndexResult = await _openSearchService.CreateIndexAsync(createIndexRequest);
                 result.Success = createIndexResult.Success;
                 result.Message += createIndexResult.Message;
 
@@ -126,7 +142,7 @@ namespace NetworkMonitor.Scheduler.Services
             return result;
         }
 
-        public ResultObj QueryIndex(QueryIndexRequest queryIndexRequest)
+        public async Task<ResultObj> QueryIndex(QueryIndexRequest queryIndexRequest)
         {
             var result = new ResultObj();
             result.Success = false;
@@ -141,7 +157,7 @@ namespace NetworkMonitor.Scheduler.Services
             try
             {
                 // Call the OpenSearch service to query the index
-                var queryIndexResult = _openSearchService.QueryIndexAsync(queryIndexRequest).Result;
+                var queryIndexResult = await _openSearchService.QueryIndexAsync(queryIndexRequest);
                 result.Success = queryIndexResult.Success;
                 result.Message += queryIndexResult.Message;
 
@@ -156,8 +172,8 @@ namespace NetworkMonitor.Scheduler.Services
             return result;
         }
 
-      
+
     }
 
-    
+
 }
