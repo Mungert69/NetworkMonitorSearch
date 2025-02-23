@@ -2,9 +2,14 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <TargetFramework>netcoreapp9.0</TargetFramework>
+    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+    <PublishProfile>DefaultContainer</PublishProfile>
+    <ContainerBaseImage>mcr.microsoft.com/dotnet/aspnet:9.0</ContainerBaseImage>
+    <ContainerImageTag>0.0.1</ContainerImageTag>
+
   </PropertyGroup>
 
   <ItemGroup>
@@ -13,5 +18,10 @@
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="OpenSearch.Client" Version="1.8.0" />
   </ItemGroup>
+
+   <ItemGroup>
+    <ProjectReference Include="..\NetworkMonitor\NetworkMonitor.csproj" />
+  </ItemGroup>
+
 
 </Project>

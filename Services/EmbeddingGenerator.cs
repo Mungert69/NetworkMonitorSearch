@@ -6,6 +6,7 @@ using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+namespace NetworkMonitor.Search.Services;
 public class EmbeddingGenerator
 {
     private readonly InferenceSession _session;

@@ -4,34 +4,80 @@ using System.IO;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using NetworkMonitor.Search.Services;
-namespace NetworkMonitor.Search;
-public class Program
+using NetworkMonitor.Objects;
+
+namespace NetworkMonitor.Search
 {
-    public static async Task Main(string[] args)
+    public class Program
     {
-        var openSearchHelper = new OpenSearchHelper("stsb-bert-tiny-onnx");
+        private readonly IOpenSearchService _openSearchService;
 
-        // Load data from JSON file
-        string filePath = Path.Combine(Directory.GetCurrentDirectory(), "input_data.json");
-        var documents = JsonConvert.DeserializeObject<List<Document>>(File.ReadAllText(filePath));
-
-        // Check for deserialization issues
-        if (documents == null)
+        // Constructor for dependency injection
+        public Program(IOpenSearchService openSearchService)
         {
-            Console.WriteLine("Failed to deserialize JSON file. Please check the file format and field names.");
-            return;
+            _openSearchService = openSearchService;
         }
 
-        Console.WriteLine("JSON deserialization succeeded. Proceeding with indexing.");
+        // Main entry point
+        public static async Task Main(string[] args)
+        {
+            // Create the OpenSearchService instance
+            var openSearchService = new OpenSearchService("stsb-bert-tiny-onnx");
 
-        // Ensure the OpenSearch index exists
-        await openSearchHelper.EnsureIndexExistsAsync(recreateIndex : true);
+            // Create the Program instance with dependency injection
+            var program = new Program(openSearchService);
 
-        // Index documents in OpenSearch
-        await openSearchHelper.IndexDocumentsAsync(documents);
+            // Run the program
+            await program.RunAsync();
+        }
 
-        // Perform a search
-        string queryText = "exchange database"; // Replace with actual query text
-        await openSearchHelper.SearchDocumentsAsync(queryText);
+        // Main logic of the program
+        public async Task RunAsync()
+        {
+            // Load data from JSON file
+            string filePath = Path.Combine(Directory.GetCurrentDirectory(), "input_data.json");
+            var documents = JsonConvert.DeserializeObject<List<Document>>(File.ReadAllText(filePath));
+
+            // Check for deserialization issues
+            if (documents == null)
+            {
+                Console.WriteLine("Failed to deserialize JSON file. Please check the file format and field names.");
+                return;
+            }
+
+            Console.WriteLine("JSON deserialization succeeded. Proceeding with indexing.");
+
+            // Create the index and index documents
+            var createIndexRequest = new CreateIndexRequest
+            {
+                IndexName = "documents",
+                JsonMapping = File.ReadAllText(filePath) // Use the JSON file content as the mapping
+            };
+
+            var createIndexResult = await _openSearchService.CreateIndexAsync(createIndexRequest);
+            if (!createIndexResult.Success)
+            {
+                Console.WriteLine($"Failed to create index: {createIndexResult.Message}");
+                return;
+            }
+
+            Console.WriteLine("Index created successfully. Proceeding with querying.");
+
+            // Perform a search
+            var queryIndexRequest = new QueryIndexRequest
+            {
+                IndexName = "documents",
+                QueryText = "exchange database" // Replace with actual query text
+            };
+
+            var queryIndexResult = await _openSearchService.QueryIndexAsync(queryIndexRequest);
+            if (!queryIndexResult.Success)
+            {
+                Console.WriteLine($"Failed to query index: {queryIndexResult.Message}");
+                return;
+            }
+
+            Console.WriteLine("Query executed successfully.");
+        }
     }
 }

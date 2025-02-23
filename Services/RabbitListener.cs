@@ -5,6 +5,7 @@ using System;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using System.Text;
+using NetworkMonitor.Objects;
 
 namespace NetworkMonitor.Scheduler.Services
 {
