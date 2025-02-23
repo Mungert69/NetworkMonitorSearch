@@ -3,23 +3,26 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.5.002.0
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "NetworkMonitorSearch", "NetworkMonitorSearch.csproj", "{2DBC4E4F-83BC-452E-B9A3-818FAC008A5D}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "NetworkMonitorSearch", "NetworkMonitorSearch.csproj", "{67809B89-D578-49B5-B5C7-9040A1029381}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
 		Release|Any CPU = Release|Any CPU
+		Release-Dev|Any CPU = Release-Dev|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{2DBC4E4F-83BC-452E-B9A3-818FAC008A5D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{2DBC4E4F-83BC-452E-B9A3-818FAC008A5D}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{2DBC4E4F-83BC-452E-B9A3-818FAC008A5D}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{2DBC4E4F-83BC-452E-B9A3-818FAC008A5D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{67809B89-D578-49B5-B5C7-9040A1029381}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{67809B89-D578-49B5-B5C7-9040A1029381}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{67809B89-D578-49B5-B5C7-9040A1029381}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{67809B89-D578-49B5-B5C7-9040A1029381}.Release|Any CPU.Build.0 = Release|Any CPU
+		{67809B89-D578-49B5-B5C7-9040A1029381}.Release-Dev|Any CPU.ActiveCfg = Release-Dev|Any CPU
+		{67809B89-D578-49B5-B5C7-9040A1029381}.Release-Dev|Any CPU.Build.0 = Release-Dev|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
-		SolutionGuid = {E484EDCD-C68D-4166-8817-C03CA0357A81}
+		SolutionGuid = {B9B92F25-9140-438F-84CE-53FDA296313D}
 	EndGlobalSection
 EndGlobal

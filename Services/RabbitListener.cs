@@ -112,7 +112,7 @@ namespace NetworkMonitor.Search.Services
             return result;
         }
 
-        public async Task<ResultObj> CreateIndex(CreateIndexRequest createIndexRequest)
+        public async Task<ResultObj> CreateIndex(CreateIndexRequest? createIndexRequest)
         {
             var result = new ResultObj();
             result.Success = false;
@@ -142,7 +142,7 @@ namespace NetworkMonitor.Search.Services
             return result;
         }
 
-        public async Task<ResultObj> QueryIndex(QueryIndexRequest queryIndexRequest)
+        public async Task<ResultObj> QueryIndex(QueryIndexRequest? queryIndexRequest)
         {
             var result = new ResultObj();
             result.Success = false;

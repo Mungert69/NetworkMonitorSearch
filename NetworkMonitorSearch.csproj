@@ -1,21 +1,38 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
     <TargetFramework>netcoreapp9.0</TargetFramework>
     <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
     <PublishProfile>DefaultContainer</PublishProfile>
     <ContainerBaseImage>mcr.microsoft.com/dotnet/aspnet:9.0</ContainerBaseImage>
+  
     <ContainerImageTag>0.0.1</ContainerImageTag>
+      <StartupObject>NetworkMonitor.Search.Program</StartupObject>
+          <Nullable>enable</Nullable>
+                <NoWarn>CS8618</NoWarn> 
 
+</PropertyGroup>
+
+ <!-- <snippet_SuppressWarnings> -->
+  <PropertyGroup>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+  <!-- </snippet_SuppressWarnings> -->
+
+
+<PropertyGroup Condition="'$(Configuration)'=='Release-Dev'">
+    <DefineConstants>DEV</DefineConstants>
+        <Optimize>true</Optimize>
+          <ContainerRepository>mungert/networkmonitorsearch-dev</ContainerRepository>
+</PropertyGroup>
+ <!-- Conditional AOT and optimization for Release configuration -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+     <!-- <PublishAot>true</PublishAot> -->
+     <Optimize>true</Optimize>
+       <ContainerRepository>mungert/networkmonitorsearch</ContainerRepository> 
   </PropertyGroup>
 
-   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
-    <Optimize>true</Optimize>
-      <ContainerImageName>mungert/networkmonitorsearch</ContainerImageName>
-  </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.20.1" />

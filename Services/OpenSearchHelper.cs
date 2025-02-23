@@ -147,6 +147,7 @@ public class OpenSearchHelper
         {
             throw new Exception($"Search failed: {response.ReasonPhrase}");
         }
+        if (searchResponse==null) searchResponse= new SearchResponseObj();
         return searchResponse;
     }
     public async Task EnsureIndexExistsAsync(string indexName = "documents", bool recreateIndex = false, int bertModelVecDim = 128)

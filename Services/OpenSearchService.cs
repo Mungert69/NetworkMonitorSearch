@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using NetworkMonitor.Objects;
+using NetworkMonitor.Objects.Repository;
 using NetworkMonitor.Utils.Helpers;
 using Newtonsoft.Json;
 
@@ -12,7 +13,7 @@ namespace NetworkMonitor.Search.Services
     {
         Task Init();
         Task<ResultObj> CreateIndexAsync(CreateIndexRequest createIndexRequest);
-        Task<TResultObj<List<QueryResult>>> QueryIndexAsync(QueryIndexRequest queryIndexRequest);
+        Task<ResultObj> QueryIndexAsync(QueryIndexRequest queryIndexRequest);
     }
 
     public class OpenSearchService : IOpenSearchService
@@ -90,7 +91,7 @@ namespace NetworkMonitor.Search.Services
                 await _openSearchHelper.IndexDocumentsAsync(documents);
                 createIndexRequest.Success = true;
                 createIndexRequest.Message += $"Index '{createIndexRequest.IndexName}' created successfully.";
-                _rabbitRepo.PublishAsync<CreateIndexRequest>("createIndexResult" + createIndexRequest.AppID, createIndexRequest);
+                await _rabbitRepo.PublishAsync<CreateIndexRequest>("createIndexResult" + createIndexRequest.AppID, createIndexRequest);
                 result.Success = createIndexRequest.Success;
                 result.Message += createIndexRequest.Message;
 
@@ -106,7 +107,9 @@ namespace NetworkMonitor.Search.Services
 
         public async Task<ResultObj> QueryIndexAsync(QueryIndexRequest queryIndexRequest)
         {
-            var result = new ResultObj("MessageAPI: QueryIndexAsync: ");
+            var result = new ResultObj();
+            result.Success=false;
+            result.Message="MessageAPI: QueryIndexAsync: ";
 
             // Sanity checks
             if (queryIndexRequest == null)
@@ -165,7 +168,7 @@ namespace NetworkMonitor.Search.Services
                 queryIndexRequest.QueryResults = queryResults;
                 queryIndexRequest.Success = true;
                 queryIndexRequest.Message += $"Query executed successfully on index '{queryIndexRequest.IndexName}'.";
-                _rabbitRepo.PublishAsync<QueryIndexRequest>("queryIndexResult" + queryIndexRequest.AppID, queryIndexRequest);
+                await _rabbitRepo.PublishAsync<QueryIndexRequest>("queryIndexResult" + queryIndexRequest.AppID, queryIndexRequest);
                 result.Success = queryIndexRequest.Success;
                 result.Message += queryIndexRequest.Message;
             }
