@@ -17,12 +17,12 @@ public class Document
     public string Output { get; set; }      // The response text
     public List<float> Embedding { get; set; }  // Precomputed embedding
 }
-
 public class OpenSearchHelper
 {
     private readonly OpenSearchClient _client;
+    private readonly EmbeddingGenerator _embeddingGenerator;
 
-    public OpenSearchHelper()
+    public OpenSearchHelper(string modelDir)
     {
         // Initialize OpenSearch client
         var settings = new ConnectionSettings(new Uri("https://localhost:9200"))
@@ -31,17 +31,32 @@ public class OpenSearchHelper
             .ServerCertificateValidationCallback((o, certificate, chain, errors) => true);
 
         _client = new OpenSearchClient(settings);
+
+        // Initialize the embedding generator
+        _embeddingGenerator = new EmbeddingGenerator(modelDir);
+    }
+
+    // Method to generate embeddings for a document
+    private List<float> GenerateEmbedding(string text)
+    {
+        return _embeddingGenerator.GenerateEmbedding(text);
     }
 
     // Method to load documents from JSON and index in OpenSearch
-    public async Task IndexDocumentsAsync(IEnumerable<Document> documents)
+    public async Task IndexDocumentsAsync(IEnumerable<Document> documents, string indexName = "documents")
     {
         foreach (var document in documents)
         {
+            // Generate embedding only when needed
+            if (document.Embedding == null || document.Embedding.Count == 0)
+            {
+                document.Embedding = GenerateEmbedding(document.Input);
+            }
+
             string documentId = ComputeSha256Hash(document.Input);
 
             // Check if the document already exists
-            var existsResponse = await _client.DocumentExistsAsync(DocumentPath<Document>.Id(documentId), d => d.Index("documents"));
+            var existsResponse = await _client.DocumentExistsAsync(DocumentPath<Document>.Id(documentId), d => d.Index(indexName));
 
             if (existsResponse.Exists)
             {
@@ -50,13 +65,12 @@ public class OpenSearchHelper
             }
 
             // Index the new document
-          var indexResponse = await _client.IndexAsync(new
-{
-     input = document.Input,
-    output = document.Output,
-    embedding = document.Embedding
-}, i => i.Index("documents").Id(documentId));
-
+            var indexResponse = await _client.IndexAsync(new
+            {
+                input = document.Input,
+                output = document.Output,
+                embedding = document.Embedding
+            }, i => i.Index(indexName).Id(documentId));
 
             if (!indexResponse.IsValid)
             {
@@ -64,112 +78,134 @@ public class OpenSearchHelper
             }
             else
             {
-               Console.WriteLine($"Indexing document ID {documentId} with embedding: {string.Join(",", document.Embedding)}");
-
+                Console.WriteLine($"Indexing document ID {documentId} with embedding: {string.Join(",", document.Embedding)}");
             }
         }
     }
 
     // Method to search for similar documents using precomputed embeddings
-   public async Task SearchDocumentsAsync(string embeddingFilePath)
-{
-    // Load the query embedding from file
-    var queryEmbedding = LoadQueryEmbedding(embeddingFilePath);
-
-    if (queryEmbedding.Count == 0)
+    public async Task SearchDocumentsAsync(string queryText, string indexName = "documents")
     {
-        Console.WriteLine("Query embedding is empty. Please check the embedding file.");
-        return;
-    }
+        // Generate embedding for the query text
+        var queryEmbedding = GenerateEmbedding(queryText);
 
-    // Create an HttpClient instance for sending the request
-    var handler = new HttpClientHandler
-    {
-        ServerCertificateCustomValidationCallback = (message, cert, chain, sslPolicyErrors) => true
-    };
-
-    using var httpClient = new HttpClient(handler)
-    {
-        BaseAddress = new Uri("https://localhost:9200")
-    };
-    httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes("admin:Ac.0462110")));
-
-    // Construct the k-NN search request body
-    var requestBody = new
-    {
-        size = 3,
-        query = new
+        if (queryEmbedding.Count == 0)
         {
-            knn = new
-            {
-                embedding = new  // Ensure this matches the field name in the index mapping
-                {
-                    vector = queryEmbedding,  // Ensure this is a valid 128-dimensional vector
-                    k = 3
-                }
-            }
+            Console.WriteLine("Failed to generate query embedding.");
+            return;
         }
-    };
 
-    // Serialize the request body to JSON using Newtonsoft.Json
-    var jsonContent = JsonConvert.SerializeObject(requestBody);
-    var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
-
-    // Send the POST request
-    var response = await httpClient.PostAsync("/documents/_search", content);
-
-    // Process the response
-    if (response.IsSuccessStatusCode)
-    {
-        var responseBody = await response.Content.ReadAsStringAsync();
-        Console.WriteLine("Search Results:");
-        Console.WriteLine(responseBody);  // Deserialize and process this JSON as needed
-    }
-    else
-    {
-        Console.WriteLine($"Search failed: {response.ReasonPhrase}");
-    }
-}
-
-public async Task EnsureIndexExistsAsync()
-{
-    var existsResponse = await _client.Indices.ExistsAsync("documents");
-    if (!existsResponse.Exists)
-    {
-        // Use low-level client to create the index with the knn_vector mapping and knn enabled
-        var createIndexResponse = await _client.LowLevel.Indices.CreateAsync<StringResponse>("documents", PostData.String(@"
+        // Create an HttpClient instance for sending the request
+        var handler = new HttpClientHandler
         {
-            ""settings"": {
-                ""index"": {
-                    ""knn"": true
-                }
-            },
-            ""mappings"": {
-                ""properties"": {
-                    ""input"": { ""type"": ""text"" },
-                    ""output"": { ""type"": ""text"" },
-                    ""embedding"": { 
-                        ""type"": ""knn_vector"", 
-                        ""dimension"": 128,
-                        ""method"": {
-                            ""name"": ""hnsw"",
-                            ""space_type"": ""l2"",
-                            ""engine"": ""nmslib""
-                        }
+            ServerCertificateCustomValidationCallback = (message, cert, chain, sslPolicyErrors) => true
+        };
+
+        using var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://localhost:9200")
+        };
+        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes("admin:Ac.0462110")));
+
+        // Construct the k-NN search request body
+        var requestBody = new
+        {
+            size = 3,
+            query = new
+            {
+                knn = new
+                {
+                    embedding = new  // Ensure this matches the field name in the index mapping
+                    {
+                        vector = queryEmbedding,  // Ensure this is a valid 128-dimensional vector
+                        k = 3
                     }
                 }
             }
-        }"));
+        };
 
-        if (!createIndexResponse.Success)
+        // Serialize the request body to JSON using Newtonsoft.Json
+        var jsonContent = JsonConvert.SerializeObject(requestBody);
+        var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+
+        // Send the POST request to the specified index
+        var response = await httpClient.PostAsync($"/{indexName}/_search", content);
+
+        // Process the response
+        if (response.IsSuccessStatusCode)
         {
-            Console.WriteLine($"Failed to create index: {createIndexResponse.Body}");
+            var responseBody = await response.Content.ReadAsStringAsync();
+            Console.WriteLine("Search Results:");
+            Console.WriteLine(responseBody);  // Deserialize and process this JSON as needed
+        }
+        else
+        {
+            Console.WriteLine($"Search failed: {response.ReasonPhrase}");
         }
     }
-}
 
+    public async Task EnsureIndexExistsAsync(string indexName = "documents", bool recreateIndex = false)
+    {
+        if (recreateIndex)
+        {
+            await DeleteIndexAsync(indexName);
+        }
 
+        var existsResponse = await _client.Indices.ExistsAsync(indexName);
+        if (!existsResponse.Exists)
+        {
+            // Use low-level client to create the index with the knn_vector mapping and knn enabled
+            var createIndexResponse = await _client.LowLevel.Indices.CreateAsync<StringResponse>(indexName, PostData.String(@"
+            {
+                ""settings"": {
+                    ""index"": {
+                        ""knn"": true
+                    }
+                },
+                ""mappings"": {
+                    ""properties"": {
+                        ""input"": { ""type"": ""text"" },
+                        ""output"": { ""type"": ""text"" },
+                        ""embedding"": { 
+                            ""type"": ""knn_vector"", 
+                            ""dimension"": 128,
+                            ""method"": {
+                                ""name"": ""hnsw"",
+                                ""space_type"": ""l2"",
+                                ""engine"": ""nmslib""
+                            }
+                        }
+                    }
+                }
+            }"));
 
+            if (!createIndexResponse.Success)
+            {
+                Console.WriteLine($"Failed to create index: {createIndexResponse.Body}");
+            }
+        }
+    }
+
+    public async Task DeleteIndexAsync(string indexName = "documents")
+    {
+        var existsResponse = await _client.Indices.ExistsAsync(indexName);
+        if (existsResponse.Exists)
+        {
+            var deleteResponse = await _client.Indices.DeleteAsync(indexName);
+            if (deleteResponse.IsValid)
+            {
+                Console.WriteLine($"Index '{indexName}' deleted successfully.");
+            }
+            else
+            {
+                Console.WriteLine($"Failed to delete index '{indexName}': {deleteResponse.DebugInformation}");
+            }
+        }
+        else
+        {
+            Console.WriteLine($"Index '{indexName}' does not exist. No action taken.");
+        }
+    }
 
     // Method to compute a SHA256 hash for unique document IDs
     private static string ComputeSha256Hash(string rawData)
@@ -183,29 +219,6 @@ public async Task EnsureIndexExistsAsync()
                 builder.Append(b.ToString("x2"));
             }
             return builder.ToString();
-        }
-    }
-
-    // Method to read the query embedding from a JSON file
-    private List<float> LoadQueryEmbedding(string filePath)
-    {
-        try
-        {
-            var jsonData = File.ReadAllText(filePath);
-            var embeddingData = JsonConvert.DeserializeObject<Dictionary<string, object>>(jsonData);
-
-            if (embeddingData != null && embeddingData.ContainsKey("embedding"))
-            {
-                return JsonConvert.DeserializeObject<List<float>>(embeddingData["embedding"].ToString());
-            }
-
-            Console.WriteLine("Embedding data not found in the specified file.");
-            return new List<float>();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error reading embedding file: {ex.Message}");
-            return new List<float>();
         }
     }
 }
