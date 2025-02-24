@@ -20,7 +20,7 @@ namespace NetworkMonitor.Search.Services
     {
         private readonly OpenSearchHelper _openSearchHelper;
         private readonly string _encryptKey;
-        private int _bertModelVecDim = 128;
+        private OSModelParams _modelParams=new OSModelParams();
         private readonly ILogger _logger;
         private readonly IRabbitRepo _rabbitRepo;
 
@@ -28,10 +28,15 @@ namespace NetworkMonitor.Search.Services
         {
             _logger = logger;
             _encryptKey = systemParamsHelper.GetSystemParams().EmailEncryptKey;
-            string modelDir = systemParamsHelper.GetMLParams().BertModelDir;
-            _bertModelVecDim = systemParamsHelper.GetMLParams().BertModelVecDim;
+
+            _modelParams.BertModelDir = systemParamsHelper.GetMLParams().BertModelDir;
+            _modelParams.BertModelVecDim = systemParamsHelper.GetMLParams().BertModelVecDim;
+            _modelParams.Key=systemParamsHelper.GetMLParams().OpenSearchKey;
+            _modelParams.User=systemParamsHelper.GetMLParams().OpenSearchUser;
+            _modelParams.Url=systemParamsHelper.GetMLParams().OpenSearchUrl;
+            _modelParams.DefaultIndex=systemParamsHelper.GetMLParams().OpenSearchDefaultIndex;
             _rabbitRepo = rabbitRepo;
-            _openSearchHelper = new OpenSearchHelper(modelDir);
+            _openSearchHelper = new OpenSearchHelper(_modelParams);
         }
 
         public Task Init()
@@ -86,7 +91,7 @@ namespace NetworkMonitor.Search.Services
 
                 Console.WriteLine("JSON deserialization succeeded. Proceeding with indexing.");
 
-                await _openSearchHelper.EnsureIndexExistsAsync(indexName: createIndexRequest.IndexName, recreateIndex: createIndexRequest.RecreateIndex, bertModelVecDim: _bertModelVecDim);
+                await _openSearchHelper.EnsureIndexExistsAsync(indexName: createIndexRequest.IndexName, recreateIndex: createIndexRequest.RecreateIndex);
 
                 await _openSearchHelper.IndexDocumentsAsync(documents);
                 createIndexRequest.Success = true;

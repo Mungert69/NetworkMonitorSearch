@@ -22,19 +22,21 @@ public class OpenSearchHelper
 {
     private readonly OpenSearchClient _client;
     private readonly EmbeddingGenerator _embeddingGenerator;
+    private OSModelParams _modelParams;
 
-    public OpenSearchHelper(string modelDir)
+    public OpenSearchHelper(OSModelParams modelParams)
     {
+        _modelParams=modelParams;
         // Initialize OpenSearch client
-        var settings = new ConnectionSettings(new Uri("https://opensearch:9200"))
-            .DefaultIndex("documents")
-            .BasicAuthentication("admin", "Ac.0462110")
+        var settings = new ConnectionSettings(_modelParams.SearchUri)
+            .DefaultIndex(_modelParams.DefaultIndex)
+            .BasicAuthentication(_modelParams.User, _modelParams.Key)
             .ServerCertificateValidationCallback((o, certificate, chain, errors) => true);
 
         _client = new OpenSearchClient(settings);
 
         // Initialize the embedding generator
-        _embeddingGenerator = new EmbeddingGenerator(modelDir);
+        _embeddingGenerator = new EmbeddingGenerator(_modelParams.BertModelDir);
     }
 
     // Method to generate embeddings for a document
@@ -44,8 +46,9 @@ public class OpenSearchHelper
     }
 
     // Method to load documents from JSON and index in OpenSearch
-    public async Task IndexDocumentsAsync(IEnumerable<Document> documents, string indexName = "documents")
+    public async Task IndexDocumentsAsync(IEnumerable<Document> documents, string indexName = "")
     {
+         if (indexName=="") indexName=_modelParams.DefaultIndex;
         foreach (var document in documents)
         {
             // Generate embedding only when needed
@@ -85,8 +88,9 @@ public class OpenSearchHelper
     }
 
     // Method to search for similar documents using precomputed embeddings
-    public async Task<SearchResponseObj> SearchDocumentsAsync(string queryText, string indexName = "documents")
+    public async Task<SearchResponseObj> SearchDocumentsAsync(string queryText, string indexName = "")
     {
+          if (indexName=="") indexName=_modelParams.DefaultIndex;
         // Generate embedding for the query text
         var queryEmbedding = GenerateEmbedding(queryText);
         var searchResponse = new SearchResponseObj();
@@ -104,9 +108,9 @@ public class OpenSearchHelper
 
         using var httpClient = new HttpClient(handler)
         {
-            BaseAddress = new Uri("https://opensearch:9200")
+            BaseAddress = _modelParams.SearchUri
         };
-        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes("admin:Ac.0462110")));
+        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes($"{_modelParams.User}:{_modelParams.Key}")));
 
         // Construct the k-NN search request body
         var requestBody = new
@@ -150,8 +154,9 @@ public class OpenSearchHelper
         if (searchResponse==null) searchResponse= new SearchResponseObj();
         return searchResponse;
     }
-    public async Task EnsureIndexExistsAsync(string indexName = "documents", bool recreateIndex = false, int bertModelVecDim = 128)
+    public async Task EnsureIndexExistsAsync(string indexName = "",bool recreateIndex = false)
     {
+          if (indexName=="") indexName=_modelParams.DefaultIndex;
         if (recreateIndex)
         {
             await DeleteIndexAsync(indexName);
@@ -174,7 +179,7 @@ public class OpenSearchHelper
                         ""output"": { ""type"": ""text"" },
                         ""embedding"": { 
                             ""type"": ""knn_vector"", 
-                            ""dimension"": " + bertModelVecDim + @",
+                            ""dimension"": " + _modelParams.BertModelVecDim + @",
                             ""method"": {
                                 ""name"": ""hnsw"",
                                 ""space_type"": ""l2"",
@@ -192,8 +197,9 @@ public class OpenSearchHelper
         }
     }
 
-    public async Task DeleteIndexAsync(string indexName = "documents")
+    public async Task DeleteIndexAsync(string indexName = "")
     {
+          if (indexName=="") indexName=_modelParams.DefaultIndex;
         var existsResponse = await _client.Indices.ExistsAsync(indexName);
         if (existsResponse.Exists)
         {
