@@ -108,21 +108,22 @@ namespace NetworkMonitor.Search.Services
         public async Task<ResultObj> QueryIndexAsync(QueryIndexRequest queryIndexRequest)
         {
             var result = new ResultObj();
-            result.Success=false;
-            result.Message="MessageAPI: QueryIndexAsync: ";
+            result.Success = true;
+            result.Message = "MessageAPI: QueryIndexAsync: ";
 
             // Sanity checks
             if (queryIndexRequest == null)
             {
                 result.Message += "Error: queryIndexRequest is null.";
                 result.Success = false;
-                return result;
+                queryIndexRequest=new QueryIndexRequest();
             }
+            queryIndexRequest.Success = false;
 
             if (EncryptHelper.IsBadKey(_encryptKey, queryIndexRequest.AuthKey, queryIndexRequest.AppID))
             {
-                result.Success = false;
-                result.Message = $" Error : Failed QueryIndexAsync bad AuthKey for AppID {queryIndexRequest.AppID}";
+                //result.Success = false;
+                result.Message += $" Error : Failed QueryIndexAsync bad AuthKey for AppID {queryIndexRequest.AppID}";
                 _logger.LogError(result.Message);
                 //return result;
             }
@@ -131,43 +132,46 @@ namespace NetworkMonitor.Search.Services
             {
                 result.Message += "Error: indexName is null or empty.";
                 result.Success = false;
-                return result;
+
             }
 
             if (string.IsNullOrWhiteSpace(queryIndexRequest.QueryText))
             {
                 result.Message += "Error: queryText is null or empty.";
                 result.Success = false;
-                return result;
+            }
+            string appID=queryIndexRequest?.AppID ?? "";
+            if (appID!="nmap" && appID!="meta") {
+                result.Message+=$" Warning : not applying Rag for LLM type {appID} .";
+                result.Success=false;
             }
 
             try
             {
-                // Perform the search query
-                var searchResponse = await _openSearchHelper.SearchDocumentsAsync(queryIndexRequest.QueryText, queryIndexRequest.IndexName);
-
-                if (searchResponse == null)
-                {
-                    result.Message += "Error: Search response is null.";
-                    result.Success = false;
-                    return result;
-                }
-
-                // Extract input and output data from the search results
                 var queryResults = new List<QueryResultObj>();
-                foreach (var hit in searchResponse.Hits.HitsList)
-                {
-                    queryResults.Add(new QueryResultObj
-                    {
-                        Input = hit.Source.Input,
-                        Output = hit.Source.Output
-                    });
-                }
 
-                // Add the query results to the TResultObj
+                if (result.Success)
+                {
+                    var searchResponse = await _openSearchHelper.SearchDocumentsAsync(queryIndexRequest.QueryText, queryIndexRequest.IndexName);
+
+                    if (searchResponse != null)
+                    {
+                        foreach (var hit in searchResponse.Hits.HitsList)
+                        {
+                            queryResults.Add(new QueryResultObj
+                            {
+                                Input = hit.Source.Input,
+                                Output = hit.Source.Output
+                            });
+                        }
+                        queryIndexRequest.Success = true;
+                        result.Message += $"Query executed successfully on index '{queryIndexRequest.IndexName}'.";
+              
+                    }
+
+                }
                 queryIndexRequest.QueryResults = queryResults;
-                queryIndexRequest.Success = true;
-                queryIndexRequest.Message += $"Query executed successfully on index '{queryIndexRequest.IndexName}'.";
+                queryIndexRequest.Message=result.Message;
                 await _rabbitRepo.PublishAsync<QueryIndexRequest>("queryIndexResult" + queryIndexRequest.AppID, queryIndexRequest);
                 result.Success = queryIndexRequest.Success;
                 result.Message += queryIndexRequest.Message;

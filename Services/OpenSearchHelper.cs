@@ -26,7 +26,7 @@ public class OpenSearchHelper
     public OpenSearchHelper(string modelDir)
     {
         // Initialize OpenSearch client
-        var settings = new ConnectionSettings(new Uri("https://localhost:9200"))
+        var settings = new ConnectionSettings(new Uri("https://opensearch:9200"))
             .DefaultIndex("documents")
             .BasicAuthentication("admin", "Ac.0462110")
             .ServerCertificateValidationCallback((o, certificate, chain, errors) => true);
@@ -104,7 +104,7 @@ public class OpenSearchHelper
 
         using var httpClient = new HttpClient(handler)
         {
-            BaseAddress = new Uri("https://localhost:9200")
+            BaseAddress = new Uri("https://opensearch:9200")
         };
         httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes("admin:Ac.0462110")));
 
