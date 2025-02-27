@@ -15,7 +15,7 @@ public class EmbeddingGenerator
     public EmbeddingGenerator(string modelDir)
     {
         // Load the ONNX model
-        var modelPath = Path.Combine(modelDir,"onnx", "model.onnx");
+        var modelPath = Path.Combine(modelDir,"model.onnx");
         _session = new InferenceSession(modelPath);
 
         // Initialize the tokenizer

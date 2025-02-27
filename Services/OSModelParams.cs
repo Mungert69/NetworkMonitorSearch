@@ -1,4 +1,5 @@
 using System.Net;
+using System;
 namespace NetworkMonitor.Search.Services;
 
 public class OSModelParams{
