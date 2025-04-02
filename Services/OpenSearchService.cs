@@ -83,7 +83,7 @@ namespace NetworkMonitor.Search.Services
                 string jsonContent = "";
                 if (!string.IsNullOrEmpty(createIndexRequest.JsonFile))
                 {
-                    jsonContent = await File.ReadAllTextAsync(createIndexRequest.JsonMapping);
+                    jsonContent = await File.ReadAllTextAsync(createIndexRequest.JsonFile);
 
                 }
                 else jsonContent = createIndexRequest.JsonMapping;
