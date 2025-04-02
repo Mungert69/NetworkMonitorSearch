@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -80,7 +81,7 @@ namespace NetworkMonitor.Search.Services
             try
             {
                 string jsonContent = "";
-                if (createIndexRequest.JsonFile)
+                if (!string.IsNullOrEmpty(createIndexRequest.JsonFile))
                 {
                     jsonContent = await File.ReadAllTextAsync(createIndexRequest.JsonMapping);
 
