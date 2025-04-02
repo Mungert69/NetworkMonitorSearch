@@ -72,9 +72,9 @@ namespace NetworkMonitor.Search.Services
                 return result;
             }
 
-            if (string.IsNullOrWhiteSpace(createIndexRequest.JsonMapping))
+            if (string.IsNullOrWhiteSpace(createIndexRequest.JsonMapping) && string.IsNullOrWhiteSpace(createIndexRequest.JsonFile))
             {
-                result.Message += "Error: jsonMapping is null or empty.";
+                result.Message += "Error: JsonMapping  and JsonFile are null or empty.";
                 return result;
             }
 
