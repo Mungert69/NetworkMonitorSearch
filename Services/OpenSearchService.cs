@@ -20,7 +20,7 @@ namespace NetworkMonitor.Search.Services
     {
         private readonly OpenSearchHelper _openSearchHelper;
         private readonly string _encryptKey;
-        private OSModelParams _modelParams=new OSModelParams();
+        private OSModelParams _modelParams = new OSModelParams();
         private readonly ILogger _logger;
         private readonly IRabbitRepo _rabbitRepo;
 
@@ -31,10 +31,10 @@ namespace NetworkMonitor.Search.Services
 
             _modelParams.BertModelDir = systemParamsHelper.GetMLParams().BertModelDir;
             _modelParams.BertModelVecDim = systemParamsHelper.GetMLParams().BertModelVecDim;
-            _modelParams.Key=systemParamsHelper.GetMLParams().OpenSearchKey;
-            _modelParams.User=systemParamsHelper.GetMLParams().OpenSearchUser;
-            _modelParams.Url=systemParamsHelper.GetMLParams().OpenSearchUrl;
-            _modelParams.DefaultIndex=systemParamsHelper.GetMLParams().OpenSearchDefaultIndex;
+            _modelParams.Key = systemParamsHelper.GetMLParams().OpenSearchKey;
+            _modelParams.User = systemParamsHelper.GetMLParams().OpenSearchUser;
+            _modelParams.Url = systemParamsHelper.GetMLParams().OpenSearchUrl;
+            _modelParams.DefaultIndex = systemParamsHelper.GetMLParams().OpenSearchDefaultIndex;
             _rabbitRepo = rabbitRepo;
             _openSearchHelper = new OpenSearchHelper(_modelParams);
         }
@@ -79,8 +79,19 @@ namespace NetworkMonitor.Search.Services
 
             try
             {
-                // Deserialize the JSON mapping
-                var documents = JsonConvert.DeserializeObject<List<Document>>(createIndexRequest.JsonMapping);
+                string jsonContent = "";
+                if (createIndexRequest.JsonFile)
+                {
+                    jsonContent = await File.ReadAllTextAsync(createIndexRequest.JsonMapping);
+
+                }
+                else jsonContent = createIndexRequest.JsonMapping;
+                if (string.IsNullOrEmpty(jsonContent))
+                {
+                    result.Message += "Error: Json is null or empty.";
+                    return result;
+                }
+                var documents = JsonConvert.DeserializeObject<List<Document>>(jsonContent);
 
                 // Check for deserialization issues
                 if (documents == null)
@@ -121,7 +132,7 @@ namespace NetworkMonitor.Search.Services
             {
                 result.Message += "Error: queryIndexRequest is null.";
                 result.Success = false;
-                queryIndexRequest=new QueryIndexRequest();
+                queryIndexRequest = new QueryIndexRequest();
             }
             queryIndexRequest.Success = false;
 
@@ -130,7 +141,7 @@ namespace NetworkMonitor.Search.Services
                 //result.Success = false;
                 result.Message += $" Error : Failed QueryIndexAsync bad AuthKey for AppID {queryIndexRequest.AppID}";
                 _logger.LogError(result.Message);
-                //return result;
+                return result;
             }
 
             if (string.IsNullOrWhiteSpace(queryIndexRequest.IndexName))
@@ -145,10 +156,11 @@ namespace NetworkMonitor.Search.Services
                 result.Message += "Error: queryText is null or empty.";
                 result.Success = false;
             }
-            string appID=queryIndexRequest?.AppID ?? "";
-            if (appID!="nmap" && appID!="meta") {
-                result.Message+=$" Warning : not applying Rag for LLM type {appID} .";
-                result.Success=false;
+            string appID = queryIndexRequest?.AppID ?? "";
+            if (appID != "nmap" && appID != "meta")
+            {
+                result.Message += $" Warning : not applying Rag for LLM type {appID} .";
+                result.Success = false;
             }
 
             try
@@ -171,12 +183,12 @@ namespace NetworkMonitor.Search.Services
                         }
                         queryIndexRequest.Success = true;
                         result.Message += $"Query executed successfully on index '{queryIndexRequest.IndexName}'.";
-              
+
                     }
 
                 }
                 queryIndexRequest.QueryResults = queryResults;
-                queryIndexRequest.Message=result.Message;
+                queryIndexRequest.Message = result.Message;
                 await _rabbitRepo.PublishAsync<QueryIndexRequest>("queryIndexResult" + queryIndexRequest.AppID, queryIndexRequest);
                 result.Success = queryIndexRequest.Success;
                 result.Message += queryIndexRequest.Message;
