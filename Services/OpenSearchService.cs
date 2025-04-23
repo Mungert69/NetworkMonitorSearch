@@ -28,7 +28,7 @@ namespace NetworkMonitor.Search.Services
         public OpenSearchService(ILogger<OpenSearchService> logger, ISystemParamsHelper systemParamsHelper, IRabbitRepo rabbitRepo)
         {
             _logger = logger;
-            _encryptKey = systemParamsHelper.GetSystemParams().EmailEncryptKey;
+            _encryptKey = systemParamsHelper.GetSystemParams().LLMEncryptKey;
 
             _modelParams.BertModelDir = systemParamsHelper.GetMLParams().BertModelDir;
             _modelParams.BertModelVecDim = systemParamsHelper.GetMLParams().BertModelVecDim;
