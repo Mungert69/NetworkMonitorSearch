@@ -56,11 +56,19 @@ namespace NetworkMonitor.Search.Services
             var result = new ResultObj();
             try
             {
-                foreach (var rabbitMQObj in _rabbitMQObjs)
+                 await Parallel.ForEachAsync(_rabbitMQObjs, async (rabbitMQObj, cancellationToken) =>
                 {
+
                     if (rabbitMQObj.ConnectChannel != null)
                     {
+
                         rabbitMQObj.Consumer = new AsyncEventingBasicConsumer(rabbitMQObj.ConnectChannel);
+                        await rabbitMQObj.ConnectChannel.BasicConsumeAsync(
+                                queue: rabbitMQObj.QueueName,
+                                autoAck: false,
+                                consumer: rabbitMQObj.Consumer
+                            );
+
 
                         switch (rabbitMQObj.FuncName)
                         {
@@ -99,7 +107,7 @@ namespace NetworkMonitor.Search.Services
                         }
 
                     }
-                }
+                });
 
                 result.Success = true;
                 result.Message = "Success: Declared all consumers.";
