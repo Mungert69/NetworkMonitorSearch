@@ -4,10 +4,10 @@
 			"path": "."
 		},
 		{
-			"path": "../NetworkMonitor"
+			"path": "../NetworkMonitorData"
 		},
 		{
-			"path": "../NetworkMonitorData"
+			"path": "../NetworkMonitorLib"
 		}
 	],
 	"settings": {}

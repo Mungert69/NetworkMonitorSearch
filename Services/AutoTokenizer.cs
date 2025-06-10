@@ -52,8 +52,20 @@ public class AutoTokenizer
         );
 
         // Load vocabulary
-        var vocabPath = Path.Combine(modelDir, "vocab.txt");
-        _vocab = LoadVocabulary(vocabPath);
+        var vocabTxtPath = Path.Combine(modelDir, "vocab.txt");
+        var vocabJsonPath = Path.Combine(modelDir, "vocab.json");
+        if (File.Exists(vocabTxtPath))
+        {
+            _vocab = LoadVocabulary(vocabTxtPath);
+        }
+        else if (File.Exists(vocabJsonPath))
+        {
+            _vocab = JsonConvert.DeserializeObject<Dictionary<string, int>>(File.ReadAllText(vocabJsonPath));
+        }
+        else
+        {
+            throw new FileNotFoundException("No vocab.txt or vocab.json found in model directory.");
+        }
     }
 
     public TokenizedInput Tokenize(string text)
