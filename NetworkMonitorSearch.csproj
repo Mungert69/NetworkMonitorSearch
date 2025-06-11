@@ -6,7 +6,7 @@
     <PublishProfile>DefaultContainer</PublishProfile>
     <ContainerBaseImage>mcr.microsoft.com/dotnet/aspnet:9.0</ContainerBaseImage>
   
-    <ContainerImageTag>0.0.2</ContainerImageTag>
+    <ContainerImageTag>0.1.0</ContainerImageTag>
       <StartupObject>NetworkMonitor.Search.Program</StartupObject>
           <Nullable>enable</Nullable>
                 <NoWarn>CS8618</NoWarn> 
@@ -57,6 +57,11 @@
 
    <ItemGroup>
     <None Include="stsb-bert-tiny-onnx\**\*">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+</ItemGroup>
+<ItemGroup>
+    <None Include="qwen3-embed-0.6-onnx\**\*">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
 </ItemGroup>

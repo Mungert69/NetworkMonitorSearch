@@ -43,13 +43,33 @@ public class AutoTokenizer
 
         // Load special tokens
         var specialTokensPath = Path.Combine(modelDir, "special_tokens_map.json");
-        var specialTokenObjects = JsonConvert.DeserializeObject<Dictionary<string, SpecialToken>>(File.ReadAllText(specialTokensPath)) ?? new ();
+        var specialTokensJson = File.ReadAllText(specialTokensPath);
+        var specialTokensJObj = JsonConvert.DeserializeObject<JObject>(specialTokensJson) ?? new JObject();
 
-        // Extract the "content" field for each token
-        _specialTokens = specialTokenObjects.ToDictionary(
-            kvp => kvp.Key, // Key remains the same (e.g., "cls_token")
-            kvp => kvp.Value.Content // Extract the "content" field
-        );
+        _specialTokens = new Dictionary<string, string>();
+        foreach (var prop in specialTokensJObj.Properties())
+        {
+            if (prop.Value.Type == JTokenType.Object)
+            {
+                // Standard case: object with "content" field
+                var tokenObj = prop.Value.ToObject<SpecialToken>();
+                _specialTokens[prop.Name] = tokenObj?.Content ?? "";
+            }
+            else if (prop.Value.Type == JTokenType.Array)
+            {
+                // For additional_special_tokens: array of strings
+                var arr = prop.Value.ToObject<List<string>>();
+                if (arr != null && arr.Count > 0)
+                {
+                    // Store the first as the representative, or handle as needed
+                    _specialTokens[prop.Name] = arr[0];
+                }
+            }
+            else if (prop.Value.Type == JTokenType.String)
+            {
+                _specialTokens[prop.Name] = prop.Value.ToString();
+            }
+        }
 
         // Load vocabulary
         var vocabTxtPath = Path.Combine(modelDir, "vocab.txt");
