@@ -190,7 +190,7 @@ namespace NetworkMonitor.Search.Services
                 }
                 queryIndexRequest.QueryResults = queryResults;
                 queryIndexRequest.Message = result.Message;
-                await _rabbitRepo.PublishAsync<QueryIndexRequest>("queryIndexResult" + queryIndexRequest.AppID, queryIndexRequest);
+                await _rabbitRepo.PublishAsync<QueryIndexRequest>("queryIndexResult" + queryIndexRequest.AppID, queryIndexRequest, queryIndexRequest.RoutingKey);
                 result.Success = queryIndexRequest.Success;
                 result.Message += queryIndexRequest.Message;
             }
