@@ -264,7 +264,7 @@ public class OpenSearchHelper
             else
             {
                 result.Message += $"Index '{indexName}' does not exist. No action taken.";
-                result.Success = false;
+                result.Success = true;
             }
         }
         catch (Exception e)
