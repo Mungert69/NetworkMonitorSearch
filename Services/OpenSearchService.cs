@@ -7,6 +7,7 @@ using NetworkMonitor.Objects;
 using NetworkMonitor.Objects.Repository;
 using NetworkMonitor.Utils.Helpers;
 using Newtonsoft.Json;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace NetworkMonitor.Search.Services
 {
@@ -24,6 +25,7 @@ namespace NetworkMonitor.Search.Services
         private OSModelParams _modelParams = new OSModelParams();
         private readonly ILogger _logger;
         private readonly IRabbitRepo _rabbitRepo;
+        private readonly MemoryCache _cache = new MemoryCache(new MemoryCacheOptions());
   
         public OpenSearchService(ILogger<OpenSearchService> logger, ISystemParamsHelper systemParamsHelper, IRabbitRepo rabbitRepo)
         {
@@ -167,30 +169,40 @@ namespace NetworkMonitor.Search.Services
             try
             {
                 var queryResults = new List<QueryResultObj>();
+                string cacheKey = $"query:{queryIndexRequest.IndexName}:{queryIndexRequest.QueryText}";
 
-                if (result.Success)
+                if (_cache.TryGetValue(cacheKey, out List<QueryResultObj> cachedResults))
                 {
-                    var searchResponse = await _openSearchHelper.SearchDocumentsAsync(queryIndexRequest.QueryText, queryIndexRequest.IndexName);
-
-                    if (searchResponse != null)
-                    {
-                        foreach (var hit in searchResponse.Hits.HitsList)
-                        {
-                            queryResults.Add(new QueryResultObj
-                            {
-                                Input = hit.Source.Input,
-                                Output = hit.Source.Output
-                            });
-                        }
-                        queryIndexRequest.Success = true;
-                        result.Message += $"Query executed successfully on index '{queryIndexRequest.IndexName}'.";
-
-                    }
-
+                    queryIndexRequest.QueryResults = cachedResults;
+                    queryIndexRequest.Success = true;
+                    result.Message += $"Cache hit for query on index '{queryIndexRequest.IndexName}'.";
                 }
-                queryIndexRequest.QueryResults = queryResults;
+                else
+                {
+                    if (result.Success)
+                    {
+                        var searchResponse = await _openSearchHelper.SearchDocumentsAsync(queryIndexRequest.QueryText, queryIndexRequest.IndexName);
+
+                        if (searchResponse != null)
+                        {
+                            foreach (var hit in searchResponse.Hits.HitsList)
+                            {
+                                queryResults.Add(new QueryResultObj
+                                {
+                                    Input = hit.Source.Input,
+                                    Output = hit.Source.Output
+                                });
+                            }
+                            queryIndexRequest.Success = true;
+                            result.Message += $"Query executed successfully on index '{queryIndexRequest.IndexName}'.";
+                        }
+                    }
+                    queryIndexRequest.QueryResults = queryResults;
+                    // Cache the results forever (until service restart)
+                    _cache.Set(cacheKey, queryResults);
+                }
                 queryIndexRequest.Message = result.Message;
-               await _rabbitRepo.PublishAsync<QueryIndexRequest>("queryIndexResult" + queryIndexRequest.AppID, queryIndexRequest, queryIndexRequest.RoutingKey);
+                await _rabbitRepo.PublishAsync<QueryIndexRequest>("queryIndexResult" + queryIndexRequest.AppID, queryIndexRequest, queryIndexRequest.RoutingKey);
                 result.Success = queryIndexRequest.Success;
                 result.Message += queryIndexRequest.Message;
             }
