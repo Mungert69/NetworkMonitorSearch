@@ -5,6 +5,7 @@ using System.Linq;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using Newtonsoft.Json.Linq;
+using Onnx;
 
 namespace NetworkMonitor.Search.Services
 {
@@ -12,14 +13,15 @@ namespace NetworkMonitor.Search.Services
     {
         private readonly InferenceSession _session;
         private readonly AutoTokenizer _tokenizer;
+        private readonly string _modelPath;
 
         public EmbeddingGenerator(string modelDir)
         {
             // Load the ONNX model with restricted CPU threads
-            var modelPath = Path.Combine(modelDir, "model.onnx");
+            _modelPath = Path.Combine(modelDir, "model.onnx");
             var options = new SessionOptions();
             options.IntraOpNumThreads = 2;
-            _session = new InferenceSession(modelPath, options);
+            _session = new InferenceSession(_modelPath, options);
 
             // Initialize the tokenizer
             _tokenizer = new AutoTokenizer(modelDir);
@@ -77,8 +79,15 @@ namespace NetworkMonitor.Search.Services
                 var embeddingsTensorF16 = embeddingResultF16.AsTensor<Float16>();
                 return PoolEmbeddingsF16(embeddingsTensorF16);
             }
+            var embeddingResultInt8 = results.FirstOrDefault(r => r.Value is Tensor<byte>);
+            if (embeddingResultInt8 != null)
+            {
+                var embeddingsTensorInt8 = embeddingResultInt8.AsTensor<byte>();
 
-            throw new Exception("No float32 or float16 tensor found in ONNX outputs!");
+                return PoolEmbeddingsUInt8(embeddingsTensorInt8);
+            }
+
+            throw new Exception("No float32 ,float16 or int8 tensor found in ONNX outputs!");
         }
 
         private List<float> PoolEmbeddings(Tensor<float> embeddingsTensor)
@@ -120,5 +129,74 @@ namespace NetworkMonitor.Search.Services
             }
             return pooledEmbedding.ToList();
         }
+        private List<float> PoolEmbeddingsUInt8(Tensor<byte> qTensor)
+        {
+            const float min = -0.300980538529f;
+            const float max = 0.395263433565f;
+            const float scale = (max - min) / 255f;
+            var dimsArr = qTensor.Dimensions.ToArray();
+
+            if (dimsArr.Length == 3)
+            {
+                int seq = dimsArr[1], dim = dimsArr[2];
+                var pooled = new float[dim];
+
+                for (int j = 0; j < dim; j++)
+                {
+                    float sum = 0;
+                    for (int i = 0; i < seq; i++)
+                    {
+                        byte q = qTensor[0, i, j];
+                        sum += q * scale + min;
+                    }
+                    pooled[j] = sum / seq;
+                }
+                return pooled.ToList();
+            }
+            else if (dimsArr.Length == 2)
+            {
+                int dim = dimsArr[1];
+                var pooled = new float[dim];
+                for (int j = 0; j < dim; j++)
+                {
+                    byte q = qTensor[0, j];
+                    pooled[j] = q * scale + min;
+                }
+                return pooled.ToList();
+            }
+            else
+            {
+                throw new Exception($"Unexpected tensor shape: [{string.Join(',', dimsArr)}]");
+            }
+        }
+
+        public void PrintEmbedding(string label, List<float> emb)
+        {
+            Console.WriteLine($"{label} first 8: {string.Join(", ", emb.Take(8))}");
+            Console.WriteLine($"{label} norm: {Math.Sqrt(emb.Sum(x => x * x))}");
+        }
+
+        public float CosineSim(List<float> a, List<float> b)
+        {
+            float dot = 0, normA = 0, normB = 0;
+            for (int i = 0; i < a.Count; i++)
+            {
+                dot += a[i] * b[i];
+                normA += a[i] * a[i];
+                normB += b[i] * b[i];
+            }
+            return dot / (float)(Math.Sqrt(normA) * Math.Sqrt(normB));
+        }
+
+        public void CompareEmbeddings(EmbeddingGenerator floatGen, EmbeddingGenerator quantGen, string text)
+        {
+            var floatEmb = floatGen.GenerateEmbedding(text);
+            var quantEmb = quantGen.GenerateEmbedding(text);
+            PrintEmbedding("FLOAT32", floatEmb);
+            PrintEmbedding("UINT8 ", quantEmb);
+            Console.WriteLine($"Cosine similarity: {CosineSim(floatEmb, quantEmb)}");
+        }
+
+
     }
 }
