@@ -15,9 +15,11 @@ namespace NetworkMonitor.Search.Services
 
         public EmbeddingGenerator(string modelDir)
         {
-            // Load the ONNX model
+            // Load the ONNX model with restricted CPU threads
             var modelPath = Path.Combine(modelDir, "model.onnx");
-            _session = new InferenceSession(modelPath);
+            var options = new SessionOptions();
+            options.IntraOpNumThreads = 2; // Restrict to 1 CPU core; set to desired number
+            _session = new InferenceSession(modelPath, options);
 
             // Initialize the tokenizer
             _tokenizer = new AutoTokenizer(modelDir);
