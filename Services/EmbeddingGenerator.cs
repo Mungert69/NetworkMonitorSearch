@@ -18,7 +18,7 @@ namespace NetworkMonitor.Search.Services
             // Load the ONNX model with restricted CPU threads
             var modelPath = Path.Combine(modelDir, "model.onnx");
             var options = new SessionOptions();
-            options.IntraOpNumThreads = 2; // Restrict to 1 CPU core; set to desired number
+            options.IntraOpNumThreads = 2;
             _session = new InferenceSession(modelPath, options);
 
             // Initialize the tokenizer
