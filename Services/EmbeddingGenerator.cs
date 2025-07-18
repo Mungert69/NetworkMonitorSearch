@@ -41,18 +41,19 @@ namespace NetworkMonitor.Search.Services
             for (int i = 0; i < seqLen; i++)
                 positionIdsArr[i] = i;
             var positionIdsTensor = new DenseTensor<long>(positionIdsArr, new[] { 1, seqLen });
-            var tokenTypeIdsTensor = new DenseTensor<long>(new long[seqLen], new[] { 1, seqLen }); // all zeros
 
 
             // Prepare inputs (include position_ids if model expects it)
+            // Prepare inputs
             var inputs = new List<NamedOnnxValue>
-            {
-                NamedOnnxValue.CreateFromTensor("input_ids", inputIdsTensor),
-                NamedOnnxValue.CreateFromTensor("attention_mask", attentionMaskTensor),
-                //NamedOnnxValue.CreateFromTensor("position_ids", positionIdsTensor)
-                NamedOnnxValue.CreateFromTensor("token_type_ids", tokenTypeIdsTensor)
+{
+    NamedOnnxValue.CreateFromTensor("input_ids", inputIdsTensor),
+    NamedOnnxValue.CreateFromTensor("attention_mask", attentionMaskTensor),
+    NamedOnnxValue.CreateFromTensor("token_type_ids",
+    //NamedOnnxValue.CreateFromTensor("position_ids", positionIdsTensor)
+        new DenseTensor<long>(new long[seqLen], new[] { 1, seqLen }))
+};
 
-            };
 
             using var results = _session.Run(inputs);
 
