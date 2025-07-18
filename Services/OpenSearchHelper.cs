@@ -11,6 +11,7 @@ using System.Net.Http.Headers;
 using OpenSearch.Net;
 using NetworkMonitor.Objects;
 namespace NetworkMonitor.Search.Services;
+
 public class Document
 {
     public string Instruction { get; set; } = "";
@@ -26,7 +27,7 @@ public class OpenSearchHelper
 
     public OpenSearchHelper(OSModelParams modelParams)
     {
-        _modelParams=modelParams;
+        _modelParams = modelParams;
         // Initialize OpenSearch client
         var settings = new ConnectionSettings(_modelParams.SearchUri)
             .DefaultIndex(_modelParams.DefaultIndex)
@@ -46,51 +47,65 @@ public class OpenSearchHelper
     }
 
     // Method to load documents from JSON and index in OpenSearch
-    public async Task IndexDocumentsAsync(IEnumerable<Document> documents, string indexName = "")
+    public async Task<ResultObj> IndexDocumentsAsync(IEnumerable<Document> documents, string indexName = "")
     {
-         if (indexName=="") indexName=_modelParams.DefaultIndex;
-        foreach (var document in documents)
+        var result = new ResultObj() { Message = " EnsureIndexExistsAsync : " };
+        bool oneFail = false;
+        try
         {
-            // Generate embedding only when needed
-            if (document.Embedding == null || document.Embedding.Count == 0)
+            if (indexName == "") indexName = _modelParams.DefaultIndex;
+            foreach (var document in documents)
             {
-                document.Embedding = GenerateEmbedding(document.Input);
+                // Generate embedding only when needed
+                if (document.Embedding == null || document.Embedding.Count == 0)
+                {
+                    document.Embedding = GenerateEmbedding(document.Input);
+                }
+
+                string documentId = ComputeSha256Hash(document.Input);
+
+                // Check if the document already exists
+                var existsResponse = await _client.DocumentExistsAsync(DocumentPath<Document>.Id(documentId), d => d.Index(indexName));
+
+                if (existsResponse.Exists)
+                {
+                    result.Message += $"Document with ID {documentId} already exists. Skipping indexing.";
+                    continue;  // Skip this document if it already exists
+                }
+
+                // Index the new document
+                var indexResponse = await _client.IndexAsync(new
+                {
+                    input = document.Input,
+                    output = document.Output,
+                    embedding = document.Embedding
+                }, i => i.Index(indexName).Id(documentId));
+
+                if (!indexResponse.IsValid)
+                {
+                    oneFail = true;
+                    result.Message += $"Failed to index document with ID {documentId}: {indexResponse.ServerError}";
+                }
+                else
+                {
+                    result.Message += $"Indexing document ID {documentId} with embedding: {string.Join(",", document.Embedding)}";
+                }
+
             }
-
-            string documentId = ComputeSha256Hash(document.Input);
-
-            // Check if the document already exists
-            var existsResponse = await _client.DocumentExistsAsync(DocumentPath<Document>.Id(documentId), d => d.Index(indexName));
-
-            if (existsResponse.Exists)
-            {
-                Console.WriteLine($"Document with ID {documentId} already exists. Skipping indexing.");
-                continue;  // Skip this document if it already exists
-            }
-
-            // Index the new document
-            var indexResponse = await _client.IndexAsync(new
-            {
-                input = document.Input,
-                output = document.Output,
-                embedding = document.Embedding
-            }, i => i.Index(indexName).Id(documentId));
-
-            if (!indexResponse.IsValid)
-            {
-                Console.WriteLine($"Failed to index document with ID {documentId}: {indexResponse.ServerError}");
-            }
-            else
-            {
-                Console.WriteLine($"Indexing document ID {documentId} with embedding: {string.Join(",", document.Embedding)}");
-            }
+            result.Success = !oneFail;
         }
+        catch (Exception e)
+        {
+            result.Success = false;
+            result.Message += e.Message;
+        }
+        return result;
     }
 
     // Method to search for similar documents using precomputed embeddings
     public async Task<SearchResponseObj> SearchDocumentsAsync(string queryText, string indexName = "")
     {
-          if (indexName=="") indexName=_modelParams.DefaultIndex;
+        if (indexName == "") indexName = _modelParams.DefaultIndex;
         // Generate embedding for the query text
         var queryEmbedding = GenerateEmbedding(queryText);
         var searchResponse = new SearchResponseObj();
@@ -151,22 +166,28 @@ public class OpenSearchHelper
         {
             throw new Exception($"Search failed: {response.ReasonPhrase}");
         }
-        if (searchResponse==null) searchResponse= new SearchResponseObj();
+        if (searchResponse == null) searchResponse = new SearchResponseObj();
         return searchResponse;
     }
-    public async Task EnsureIndexExistsAsync(string indexName = "",bool recreateIndex = false)
+    public async Task<ResultObj> EnsureIndexExistsAsync(string indexName = "", bool recreateIndex = false)
     {
-          if (indexName=="") indexName=_modelParams.DefaultIndex;
-        if (recreateIndex)
+        var result = new ResultObj() { Message = " EnsureIndexExistsAsync : " };
+        try
         {
-            await DeleteIndexAsync(indexName);
-        }
 
-        var existsResponse = await _client.Indices.ExistsAsync(indexName);
-        if (!existsResponse.Exists)
-        {
-            // Use low-level client to create the index with the knn_vector mapping and knn enabled
-            var createIndexResponse = await _client.LowLevel.Indices.CreateAsync<StringResponse>(indexName, PostData.String(@"
+            if (indexName == "") indexName = _modelParams.DefaultIndex;
+            if (recreateIndex)
+            {
+                var resultDel = await DeleteIndexAsync(indexName);
+                result.Message += resultDel.Message;
+                if (!resultDel.Success) return resultDel;
+            }
+
+            var existsResponse = await _client.Indices.ExistsAsync(indexName);
+            if (!existsResponse.Exists)
+            {
+                // Use low-level client to create the index with the knn_vector mapping and knn enabled
+                var createIndexResponse = await _client.LowLevel.Indices.CreateAsync<StringResponse>(indexName, PostData.String(@"
             {
                 ""settings"": {
                     ""index"": {
@@ -183,40 +204,70 @@ public class OpenSearchHelper
                             ""method"": {
                                 ""name"": ""hnsw"",
                                 ""space_type"": ""l2"",
-                                ""engine"": ""nmslib""
+                                ""engine"": ""faiss""
                             }
                         }
                     }
                 }
             }"));
 
-            if (!createIndexResponse.Success)
-            {
-                Console.WriteLine($"Failed to create index: {createIndexResponse.Body}");
-            }
-        }
-    }
-
-    public async Task DeleteIndexAsync(string indexName = "")
-    {
-          if (indexName=="") indexName=_modelParams.DefaultIndex;
-        var existsResponse = await _client.Indices.ExistsAsync(indexName);
-        if (existsResponse.Exists)
-        {
-            var deleteResponse = await _client.Indices.DeleteAsync(indexName);
-            if (deleteResponse.IsValid)
-            {
-                Console.WriteLine($"Index '{indexName}' deleted successfully.");
+                if (!createIndexResponse.Success)
+                {
+                    result.Message = $"Failed to create index: {createIndexResponse.DebugInformation}";
+                }
+                else result.Message += " Success : create index ";
+                result.Success = createIndexResponse.Success;
             }
             else
             {
-                Console.WriteLine($"Failed to delete index '{indexName}': {deleteResponse.DebugInformation}");
+                result.Message += " Success : index already exists ";
+                result.Success = true;
+            }
+
+        }
+        catch (Exception e)
+        {
+            result.Success = false;
+            result.Message += e.Message;
+        }
+        return result;
+    }
+
+    public async Task<ResultObj> DeleteIndexAsync(string indexName = "")
+    {
+        var result = new ResultObj() { Message = " DeleteIndexAsync : " };
+        try
+        {
+
+            if (indexName == "") indexName = _modelParams.DefaultIndex;
+            var existsResponse = await _client.Indices.ExistsAsync(indexName);
+            if (existsResponse.Exists)
+            {
+                var deleteResponse = await _client.Indices.DeleteAsync(indexName);
+                if (deleteResponse.IsValid)
+                {
+                    result.Message += $"Index '{indexName}' deleted successfully.";
+                    result.Success = true;
+                }
+                else
+                {
+                    result.Message += $"Failed to delete index '{indexName}': {deleteResponse.DebugInformation}";
+                    result.Success = false;
+                    return result;
+                }
+            }
+            else
+            {
+                result.Message += $"Index '{indexName}' does not exist. No action taken.";
+                result.Success = false;
             }
         }
-        else
+        catch (Exception e)
         {
-            Console.WriteLine($"Index '{indexName}' does not exist. No action taken.");
+            result.Success = false;
+            result.Message += e.Message;
         }
+        return result;
     }
 
     // Method to compute a SHA256 hash for unique document IDs

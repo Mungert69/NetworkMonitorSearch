@@ -24,13 +24,12 @@ namespace NetworkMonitor.Search.Services
         private OSModelParams _modelParams = new OSModelParams();
         private readonly ILogger _logger;
         private readonly IRabbitRepo _rabbitRepo;
-
+  
         public OpenSearchService(ILogger<OpenSearchService> logger, ISystemParamsHelper systemParamsHelper, IRabbitRepo rabbitRepo)
         {
             _logger = logger;
             _encryptKey = systemParamsHelper.GetSystemParams().LLMEncryptKey;
-
-            _modelParams.BertModelDir = systemParamsHelper.GetMLParams().BertModelDir;
+             _modelParams.BertModelDir = systemParamsHelper.GetMLParams().BertModelDir;
             _modelParams.BertModelVecDim = systemParamsHelper.GetMLParams().BertModelVecDim;
             _modelParams.Key = systemParamsHelper.GetMLParams().OpenSearchKey;
             _modelParams.User = systemParamsHelper.GetMLParams().OpenSearchUser;
@@ -103,11 +102,12 @@ namespace NetworkMonitor.Search.Services
 
                 Console.WriteLine("JSON deserialization succeeded. Proceeding with indexing.");
 
-                await _openSearchHelper.EnsureIndexExistsAsync(indexName: createIndexRequest.IndexName, recreateIndex: createIndexRequest.RecreateIndex);
+                var resultEn = await _openSearchHelper.EnsureIndexExistsAsync(indexName: createIndexRequest.IndexName, recreateIndex: createIndexRequest.RecreateIndex);
+                if (!resultEn.Success) return resultEn;
+                var resultIn = await _openSearchHelper.IndexDocumentsAsync(documents);
+                createIndexRequest.Success = resultEn.Success && resultIn.Success;
+                createIndexRequest.Message += resultEn.Message + resultIn.Message;
 
-                await _openSearchHelper.IndexDocumentsAsync(documents);
-                createIndexRequest.Success = true;
-                createIndexRequest.Message += $"Index '{createIndexRequest.IndexName}' created successfully.";
                 await _rabbitRepo.PublishAsync<CreateIndexRequest>("createIndexResult" + createIndexRequest.AppID, createIndexRequest);
                 result.Success = createIndexRequest.Success;
                 result.Message += createIndexRequest.Message;
@@ -190,7 +190,7 @@ namespace NetworkMonitor.Search.Services
                 }
                 queryIndexRequest.QueryResults = queryResults;
                 queryIndexRequest.Message = result.Message;
-                await _rabbitRepo.PublishAsync<QueryIndexRequest>("queryIndexResult" + queryIndexRequest.AppID, queryIndexRequest, queryIndexRequest.RoutingKey);
+               await _rabbitRepo.PublishAsync<QueryIndexRequest>("queryIndexResult" + queryIndexRequest.AppID, queryIndexRequest, queryIndexRequest.RoutingKey);
                 result.Success = queryIndexRequest.Success;
                 result.Message += queryIndexRequest.Message;
             }
