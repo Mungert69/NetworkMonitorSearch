@@ -49,8 +49,8 @@ namespace NetworkMonitor.Search.Services
 {
     NamedOnnxValue.CreateFromTensor("input_ids", inputIdsTensor),
     NamedOnnxValue.CreateFromTensor("attention_mask", attentionMaskTensor),
-    NamedOnnxValue.CreateFromTensor("token_type_ids",
     //NamedOnnxValue.CreateFromTensor("position_ids", positionIdsTensor)
+    NamedOnnxValue.CreateFromTensor("token_type_ids",
         new DenseTensor<long>(new long[seqLen], new[] { 1, seqLen }))
 };
 
