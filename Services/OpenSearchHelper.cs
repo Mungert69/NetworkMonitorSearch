@@ -3,6 +3,7 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
@@ -54,15 +55,19 @@ public class OpenSearchHelper
         try
         {
             if (indexName == "") indexName = _modelParams.DefaultIndex;
+            int docCount=documents.Count();
+            int count = 0;
             foreach (var document in documents)
             {
+                count++;
+                Console.WriteLine($"Indexing document {count} of {docCount}");
                 // Generate embedding only when needed
                 if (document.Embedding == null || document.Embedding.Count == 0)
                 {
-                    document.Embedding = GenerateEmbedding(document.Input);
+                    document.Embedding = GenerateEmbedding(document.Output);
                 }
 
-                string documentId = ComputeSha256Hash(document.Input);
+                string documentId = ComputeSha256Hash(document.Output);
 
                 // Check if the document already exists
                 var existsResponse = await _client.DocumentExistsAsync(DocumentPath<Document>.Id(documentId), d => d.Index(indexName));
