@@ -27,6 +27,8 @@ namespace NetworkMonitor.Search.Services
         {
             // Tokenize the input text
             var tokenizedInput = _tokenizer.Tokenize(text);
+            foreach (var kv in _session.InputMetadata)
+                Console.WriteLine($"{kv.Key} → {kv.Value.ElementType}, shape: [{string.Join(", ", kv.Value.Dimensions)}]");
 
             // Convert to tensors
             int seqLen = tokenizedInput.InputIds.Count;
@@ -39,6 +41,8 @@ namespace NetworkMonitor.Search.Services
             for (int i = 0; i < seqLen; i++)
                 positionIdsArr[i] = i;
             var positionIdsTensor = new DenseTensor<long>(positionIdsArr, new[] { 1, seqLen });
+            var tokenTypeIdsTensor = new DenseTensor<long>(new long[seqLen], new[] { 1, seqLen }); // all zeros
+
 
             // Prepare inputs (include position_ids if model expects it)
             var inputs = new List<NamedOnnxValue>
@@ -46,8 +50,8 @@ namespace NetworkMonitor.Search.Services
                 NamedOnnxValue.CreateFromTensor("input_ids", inputIdsTensor),
                 NamedOnnxValue.CreateFromTensor("attention_mask", attentionMaskTensor),
                 //NamedOnnxValue.CreateFromTensor("position_ids", positionIdsTensor)
-                NamedOnnxValue.CreateFromTensor("token_type_ids", positionIdsTensor)
-                
+                NamedOnnxValue.CreateFromTensor("token_type_ids", tokenTypeIdsTensor)
+
             };
 
             using var results = _session.Run(inputs);
