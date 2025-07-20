@@ -14,7 +14,7 @@ namespace NetworkMonitor.Search.Services
         private readonly InferenceSession _session;
         private readonly AutoTokenizer _tokenizer;
         private readonly string _modelPath;
-       
+
         private static readonly object _embeddingLock = new object();
 
         public EmbeddingGenerator(string modelDir)
@@ -29,11 +29,13 @@ namespace NetworkMonitor.Search.Services
             _tokenizer = new AutoTokenizer(modelDir);
         }
 
-        public List<float> GenerateEmbedding(string text, int maxTokens)
+        public List<float> GenerateEmbedding(string text, int maxTokens, bool pad = false)
         {
             lock (_embeddingLock)
             {
-               var tokenizedInput = _tokenizer.Tokenize(text, maxTokens);
+                var tokenizedInput = pad
+                    ? _tokenizer.Tokenize(text, maxTokens)
+                    : _tokenizer.TokenizeNoPad(text);
 
                 foreach (var kv in _session.InputMetadata)
                     Console.WriteLine($"{kv.Key} → {kv.Value.ElementType}, shape: [{string.Join(", ", kv.Value.Dimensions)}]");
@@ -74,28 +76,31 @@ namespace NetworkMonitor.Search.Services
                 if (embeddingResultFloat != null)
                 {
                     var embeddingsTensor = embeddingResultFloat.AsTensor<float>();
-                    return PoolEmbeddings(embeddingsTensor);
+                    return PoolEmbeddings(embeddingsTensor, tokenizedInput.AttentionMask);
                 }
-
                 var embeddingResultF16 = results.FirstOrDefault(r => r.Value is Tensor<Float16>);
                 if (embeddingResultF16 != null)
                 {
                     var embeddingsTensorF16 = embeddingResultF16.AsTensor<Float16>();
-                    return PoolEmbeddingsF16(embeddingsTensorF16);
+                    return PoolEmbeddingsF16(embeddingsTensorF16, tokenizedInput.AttentionMask);
                 }
                 var embeddingResultInt8 = results.FirstOrDefault(r => r.Value is Tensor<byte>);
                 if (embeddingResultInt8 != null)
                 {
                     var embeddingsTensorInt8 = embeddingResultInt8.AsTensor<byte>();
+                    // Replace these with actual values for your quantized model
+                    float scale = 0.0027f;        // Example value, get from model
+                    float zeroPoint = 128.0f;     // Example value, get from model
 
-                    return PoolEmbeddingsUInt8(embeddingsTensorInt8);
+                    return PoolEmbeddingsUInt8(embeddingsTensorInt8, tokenizedInput.AttentionMask, scale, zeroPoint);
+
                 }
 
                 throw new Exception("No float32 ,float16 or int8 tensor found in ONNX outputs!");
             }
         }
 
-        private List<float> PoolEmbeddings(Tensor<float> embeddingsTensor)
+        private List<float> PoolEmbeddings(Tensor<float> embeddingsTensor, List<long> attentionMask)
         {
             var dims = embeddingsTensor.Dimensions;
             if (dims.Length != 3)
@@ -108,14 +113,21 @@ namespace NetworkMonitor.Search.Services
             for (int i = 0; i < embeddingDim; i++)
             {
                 float sum = 0;
+                int count = 0;
                 for (int j = 0; j < seqLen; j++)
-                    sum += embeddingsTensor[0, j, i];
-                pooledEmbedding[i] = sum / seqLen;
+                {
+                    if (attentionMask[j] == 1)
+                    {
+                        sum += embeddingsTensor[0, j, i];
+                        count++;
+                    }
+                }
+                pooledEmbedding[i] = count > 0 ? sum / count : 0;
             }
             return pooledEmbedding.ToList();
         }
 
-        private List<float> PoolEmbeddingsF16(Tensor<Float16> embeddingsTensor)
+        private List<float> PoolEmbeddingsF16(Tensor<Float16> embeddingsTensor, List<long> attentionMask)
         {
             var dims = embeddingsTensor.Dimensions;
             if (dims.Length != 3)
@@ -128,17 +140,27 @@ namespace NetworkMonitor.Search.Services
             for (int i = 0; i < embeddingDim; i++)
             {
                 float sum = 0;
+                int count = 0;
                 for (int j = 0; j < seqLen; j++)
-                    sum += (float)embeddingsTensor[0, j, i]; // Convert Float16 → float
-                pooledEmbedding[i] = sum / seqLen;
+                {
+                    if (attentionMask[j] == 1)
+                    {
+                        sum += (float)embeddingsTensor[0, j, i];
+                        count++;
+                    }
+                }
+                pooledEmbedding[i] = count > 0 ? sum / count : 0;
             }
             return pooledEmbedding.ToList();
         }
-        private List<float> PoolEmbeddingsUInt8(Tensor<byte> qTensor)
+
+        private List<float> PoolEmbeddingsUInt8(
+      Tensor<byte> qTensor,
+      List<long> attentionMask,
+      float scale,
+      float zeroPoint
+  )
         {
-            const float min = -0.300980538529f;
-            const float max = 0.395263433565f;
-            const float scale = (max - min) / 255f;
             var dimsArr = qTensor.Dimensions.ToArray();
 
             if (dimsArr.Length == 3)
@@ -149,12 +171,17 @@ namespace NetworkMonitor.Search.Services
                 for (int j = 0; j < dim; j++)
                 {
                     float sum = 0;
+                    int count = 0;
                     for (int i = 0; i < seq; i++)
                     {
-                        byte q = qTensor[0, i, j];
-                        sum += q * scale + min;
+                        if (attentionMask[i] == 1)
+                        {
+                            byte q = qTensor[0, i, j];
+                            sum += (q - zeroPoint) * scale;
+                            count++;
+                        }
                     }
-                    pooled[j] = sum / seq;
+                    pooled[j] = count > 0 ? sum / count : 0;
                 }
                 return pooled.ToList();
             }
@@ -164,8 +191,15 @@ namespace NetworkMonitor.Search.Services
                 var pooled = new float[dim];
                 for (int j = 0; j < dim; j++)
                 {
-                    byte q = qTensor[0, j];
-                    pooled[j] = q * scale + min;
+                    if (attentionMask[j] == 1)
+                    {
+                        byte q = qTensor[0, j];
+                        pooled[j] = (q - zeroPoint) * scale;
+                    }
+                    else
+                    {
+                        pooled[j] = 0;
+                    }
                 }
                 return pooled.ToList();
             }
@@ -175,6 +209,123 @@ namespace NetworkMonitor.Search.Services
             }
         }
 
+        public List<List<float>> GenerateBatchEmbeddings(List<string> texts, int maxTokens)
+        {
+            lock (_embeddingLock)
+            {
+                var tokenized = texts.Select(t => _tokenizer.Tokenize(t, maxTokens)).ToList();
+                int B = texts.Count, S = maxTokens;
+
+                // Build data arrays
+                var inputIds = new long[B, S];
+                var attentionMask = new long[B, S];
+                var positionIds = new long[B, S];
+
+                for (int b = 0; b < B; b++)
+                {
+                    var tkn = tokenized[b];
+                    for (int j = 0; j < S; j++)
+                    {
+                        inputIds[b, j] = tkn.InputIds[j];
+                        attentionMask[b, j] = tkn.AttentionMask[j];
+                        positionIds[b, j] = j;
+                    }
+                }
+
+                var inputs = new List<NamedOnnxValue>
+                {
+                    NamedOnnxValue.CreateFromTensor("input_ids", inputIds.ToTensor()),
+                    NamedOnnxValue.CreateFromTensor("attention_mask", attentionMask.ToTensor()),
+                    NamedOnnxValue.CreateFromTensor("position_ids", positionIds.ToTensor())
+                };
+                using var results = _session.Run(inputs);
+
+                // Find the output (float32 or float16)
+                var embeddingResultFloat = results.FirstOrDefault(r => r.Value is Tensor<float>);
+                var embeddingResultF16 = results.FirstOrDefault(r => r.Value is Tensor<Float16>);
+
+                if (embeddingResultFloat != null)
+                {
+                    var embeddingsTensor = embeddingResultFloat.AsTensor<float>();
+                    return PoolBatchEmbeddings(embeddingsTensor, tokenized.Select(x => x.AttentionMask).ToList());
+                }
+                if (embeddingResultF16 != null)
+                {
+                    var embeddingsTensorF16 = embeddingResultF16.AsTensor<Float16>();
+                    return PoolBatchEmbeddingsF16(embeddingsTensorF16, tokenized.Select(x => x.AttentionMask).ToList());
+                }
+                throw new Exception("No float32 or float16 tensor found in ONNX outputs!");
+            }
+        }
+
+        // Helper: Pool embeddings for batch outputs (float32)
+        private List<List<float>> PoolBatchEmbeddings(Tensor<float> embeddingsTensor, List<List<long>> attentionMasks)
+        {
+            var dims = embeddingsTensor.Dimensions;
+            if (dims.Length != 3)
+                throw new Exception($"Unexpected tensor shape: [{string.Join(", ", dims.ToArray())}]");
+
+            int batchSize = dims[0];
+            int seqLen = dims[1];
+            int embeddingDim = dims[2];
+            var results = new List<List<float>>(batchSize);
+
+            for (int b = 0; b < batchSize; b++)
+            {
+                var pooled = new float[embeddingDim];
+                for (int i = 0; i < embeddingDim; i++)
+                {
+                    float sum = 0;
+                    int count = 0;
+                    for (int j = 0; j < seqLen; j++)
+                    {
+                        if (attentionMasks[b][j] == 1)
+                        {
+                            sum += embeddingsTensor[b, j, i];
+                            count++;
+                        }
+                    }
+                    pooled[i] = count > 0 ? sum / count : 0;
+                }
+                results.Add(pooled.ToList());
+            }
+            return results;
+        }
+
+        // Helper: Pool embeddings for batch outputs (float16)
+        private List<List<float>> PoolBatchEmbeddingsF16(Tensor<Float16> embeddingsTensor, List<List<long>> attentionMasks)
+        {
+            var dims = embeddingsTensor.Dimensions;
+            if (dims.Length != 3)
+                throw new Exception($"Unexpected tensor shape: [{string.Join(", ", dims.ToArray())}]");
+
+
+            int batchSize = dims[0];
+            int seqLen = dims[1];
+            int embeddingDim = dims[2];
+            var results = new List<List<float>>(batchSize);
+
+            for (int b = 0; b < batchSize; b++)
+            {
+                var pooled = new float[embeddingDim];
+                for (int i = 0; i < embeddingDim; i++)
+                {
+                    float sum = 0;
+                    int count = 0;
+                    for (int j = 0; j < seqLen; j++)
+                    {
+                        if (attentionMasks[b][j] == 1)
+                        {
+                            sum += (float)embeddingsTensor[b, j, i];
+                            count++;
+                        }
+                    }
+                    pooled[i] = count > 0 ? sum / count : 0;
+                }
+                results.Add(pooled.ToList());
+            }
+            return results;
+        }
         public void PrintEmbedding(string label, List<float> emb)
         {
             Console.WriteLine($"{label} first 8: {string.Join(", ", emb.Take(8))}");

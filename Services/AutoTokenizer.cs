@@ -52,6 +52,18 @@ namespace NetworkMonitor.Search.Services
             if (!vocab.TryGetValue(padToken, out _padTokenId))
                 throw new Exception($"Pad token '{padToken}' not found in vocabulary.");
         }
+        public TokenizedInput TokenizeNoPad(string text)
+        {
+            var ids = _tokenizer.Encode(text);
+            var inputIds = ids.Select(i => (long)i).ToList();
+            var attentionMask = Enumerable.Repeat(1L, inputIds.Count).ToList();
+            return new TokenizedInput
+            {
+                InputIds = inputIds,
+                AttentionMask = attentionMask,
+                TokenTypeIds = Enumerable.Repeat(0L, inputIds.Count).ToList()
+            };
+        }
         public TokenizedInput Tokenize(string text, int maxLength)
         {
             var ids = _tokenizer.Encode(text); // ids is uint[]

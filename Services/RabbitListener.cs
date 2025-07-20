@@ -164,10 +164,7 @@ namespace NetworkMonitor.Search.Services
                 }
                 else
                 {
-                    result.Success = false;
-                    result.Message += "Error: Single-file CreateIndex is not supported via RabbitListener. Use CreateFromJsonDataDir=true.";
-                    _logger.LogWarning(result.Message);
-                    return result;
+                    createIndexResult = await _openSearchService.CreateIndexAsync(createIndexRequest);
                 }
                 result.Success = createIndexResult.Success;
                 result.Message += createIndexResult.Message;

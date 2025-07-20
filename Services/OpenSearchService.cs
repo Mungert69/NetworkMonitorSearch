@@ -21,6 +21,10 @@ namespace NetworkMonitor.Search.Services
         Task<ResultObj> CreateSnapshotAsync(string snapshotRepo, string snapshotName, string indices = "documents,securitybooks");
         Task<ResultObj> RestoreSnapshotAsync(string snapshotRepo, string snapshotName, string indices = "documents,securitybooks");
         Task<ResultObj> CreateIndicesFromDataDirAsync(CreateIndexRequest createIndexRequest);
+
+        // Add both overloads for CreateIndexAsync
+        Task<ResultObj> CreateIndexAsync(CreateIndexRequest createIndexRequest, int maxTokenLength);
+        Task<ResultObj> CreateIndexAsync(CreateIndexRequest createIndexRequest);
     }
 
     public class OpenSearchService : IOpenSearchService
@@ -177,7 +181,7 @@ namespace NetworkMonitor.Search.Services
             return null;
         }
 
-        private async Task<ResultObj> CreateIndexAsync(CreateIndexRequest createIndexRequest, int maxTokenLength)
+        public async Task<ResultObj> CreateIndexAsync(CreateIndexRequest createIndexRequest, int maxTokenLength)
         {
             var result = new ResultObj();
             result.Success = false;
@@ -267,6 +271,28 @@ namespace NetworkMonitor.Search.Services
             }
 
             return result;
+        }
+
+        // Overload: CreateIndexAsync that looks up maxTokenLength from index name
+        public async Task<ResultObj> CreateIndexAsync(CreateIndexRequest createIndexRequest)
+        {
+            if (createIndexRequest == null || string.IsNullOrWhiteSpace(createIndexRequest.IndexName))
+            {
+                return new ResultObj { Success = false, Message = "Error: createIndexRequest or IndexName is null." };
+            }
+
+            // Try to load max tokens for this index, fail if not found
+            int? maxTokens = LoadIndexMaxTokens(createIndexRequest.IndexName);
+            if (!maxTokens.HasValue)
+            {
+                return new ResultObj
+                {
+                    Success = false,
+                    Message = $"Error: Could not find maxTokens for index '{createIndexRequest.IndexName}'."
+                };
+            }
+
+            return await CreateIndexAsync(createIndexRequest, maxTokens.Value);
         }
         /// <summary>
         /// Reads a data directory, treats each subdirectory as an index name, and for each JSON file in each subdirectory,
@@ -394,7 +420,7 @@ namespace NetworkMonitor.Search.Services
 
                     // Pass the maxTokenLength for this index
                     var createResult = await CreateIndexAsync(req, maxTokenLength);
-                    result.Message += $"Index '{indexName}', File '{Path.GetFileName(jsonFile)}': {createResult.Message}\n";
+                    result.Message += $"Index '{indexName}', File '{Path.GetFileName(jsonFile)}': MaxTokens {maxTokenLength} : {createResult.Message}\n";
                     if (!createResult.Success)
                         result.Success = false;
                 }
