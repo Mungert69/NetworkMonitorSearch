@@ -36,7 +36,7 @@ namespace NetworkMonitor.Search.Services
         private readonly IRabbitRepo _rabbitRepo;
         private readonly string _dataDir;
         private readonly MemoryCache _cache = new MemoryCache(new MemoryCacheOptions());
-        private const int MaxTokenLengthCap = 4096;
+        private const int MaxTokenLengthCap = 32000;
         private const int MinTokenLengthCap = 128;
 
         public OpenSearchService(ILogger<OpenSearchService> logger, ISystemParamsHelper systemParamsHelper, IRabbitRepo rabbitRepo)
@@ -320,9 +320,15 @@ namespace NetworkMonitor.Search.Services
                 return result;
             }
 
+            // Skip the index_config directory if present
             foreach (var indexDir in indexDirs)
             {
                 var indexName = Path.GetFileName(indexDir);
+                if (string.Equals(indexName, "index_config", StringComparison.OrdinalIgnoreCase))
+                {
+                    result.Message += $"Skipping special directory '{indexName}'.\n";
+                    continue;
+                }
                 var jsonFiles = Directory.GetFiles(indexDir, "*.json");
                 if (jsonFiles.Length == 0)
                 {
@@ -465,11 +471,11 @@ namespace NetworkMonitor.Search.Services
                 result.Success = false;
             }
             string appID = queryIndexRequest?.AppID ?? "";
-            if (appID != "nmap" && appID != "meta")
+            /*if (appID != "nmap" && appID != "meta")
             {
                 result.Message += $" Warning : not applying Rag for LLM type {appID} .";
                 result.Success = false;
-            }
+            }*/
 
             try
             {
