@@ -15,8 +15,10 @@ namespace NetworkMonitor.Search.Services
     {
         Task<ResultObj> CreateIndex(CreateIndexRequest createIndexRequest);
         Task<ResultObj> QueryIndex(QueryIndexRequest queryIndexRequest);
+        Task<ResultObj> CreateSnapshot(CreateSnapshotRequest createSnapshotRequest);
         Task Shutdown();
         Task<ResultObj> Setup();
+       
     }
 
     public class RabbitListener : RabbitListenerBase, IRabbitListener
@@ -49,6 +51,13 @@ namespace NetworkMonitor.Search.Services
                 FuncName = "queryIndex",
                 MessageTimeout = 60000
             });
+
+            _rabbitMQObjs.Add(new RabbitMQObj()
+            {
+                ExchangeName = "createSnapshot",
+                FuncName = "createSnapshot",
+                MessageTimeout = 60000
+            });
         }
 
         protected override async Task<ResultObj> DeclareConsumers()
@@ -75,34 +84,47 @@ namespace NetworkMonitor.Search.Services
                             case "createIndex":
                                 await rabbitMQObj.ConnectChannel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
                                 rabbitMQObj.Consumer.ReceivedAsync += async (model, ea) =>
-                            {
-                                try
                                 {
-
-                                    result = await CreateIndex(ConvertToObject<CreateIndexRequest>(model, ea));
-                                    await rabbitMQObj.ConnectChannel.BasicAckAsync(ea.DeliveryTag, false);
-                                }
-                                catch (Exception ex)
-                                {
-                                    _logger.LogError(" Error : RabbitListener.DeclareConsumers.createIndex " + ex.Message);
-                                }
-                            };
+                                    try
+                                    {
+                                        result = await CreateIndex(ConvertToObject<CreateIndexRequest>(model, ea));
+                                        await rabbitMQObj.ConnectChannel.BasicAckAsync(ea.DeliveryTag, false);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _logger.LogError(" Error : RabbitListener.DeclareConsumers.createIndex " + ex.Message);
+                                    }
+                                };
                                 break;
                             case "queryIndex":
                                 await rabbitMQObj.ConnectChannel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
                                 rabbitMQObj.Consumer.ReceivedAsync += async (model, ea) =>
-                            {
-                                try
                                 {
-
-                                    result = await QueryIndex(ConvertToObject<QueryIndexRequest>(model, ea));
-                                    await rabbitMQObj.ConnectChannel.BasicAckAsync(ea.DeliveryTag, false);
-                                }
-                                catch (Exception ex)
+                                    try
+                                    {
+                                        result = await QueryIndex(ConvertToObject<QueryIndexRequest>(model, ea));
+                                        await rabbitMQObj.ConnectChannel.BasicAckAsync(ea.DeliveryTag, false);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _logger.LogError(" Error : RabbitListener.DeclareConsumers.queryIndex " + ex.Message);
+                                    }
+                                };
+                                break;
+                            case "createSnapshot":
+                                await rabbitMQObj.ConnectChannel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
+                                rabbitMQObj.Consumer.ReceivedAsync += async (model, ea) =>
                                 {
-                                    _logger.LogError(" Error : RabbitListener.DeclareConsumers.queryIndex " + ex.Message);
-                                }
-                            };
+                                    try
+                                    {
+                                        result = await CreateSnapshot(ConvertToObject<CreateSnapshotRequest>(model, ea));
+                                        await rabbitMQObj.ConnectChannel.BasicAckAsync(ea.DeliveryTag, false);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _logger.LogError(" Error : RabbitListener.DeclareConsumers.createSnapshot " + ex.Message);
+                                    }
+                                };
                                 break;
                         }
 
@@ -134,8 +156,16 @@ namespace NetworkMonitor.Search.Services
 
             try
             {
-                // Call the OpenSearch service to create the index
-                var createIndexResult = await _openSearchService.CreateIndexAsync(createIndexRequest);
+                // Branch between single index and directory mode
+                ResultObj createIndexResult;
+                if (createIndexRequest.CreateFromJsonDataDir)
+                {
+                    createIndexResult = await _openSearchService.CreateIndicesFromDataDirAsync(createIndexRequest);
+                }
+                else
+                {
+                    createIndexResult = await _openSearchService.CreateIndexAsync(createIndexRequest);
+                }
                 result.Success = createIndexResult.Success;
                 result.Message += createIndexResult.Message;
 
@@ -180,6 +210,39 @@ namespace NetworkMonitor.Search.Services
             return result;
         }
 
+ public async Task<ResultObj> CreateSnapshot(CreateSnapshotRequest? createSnapshotRequest)
+        {
+            var result = new ResultObj();
+            result.Success = false;
+            result.Message = "MessageAPI: CreateSnapshot: ";
+            if (createSnapshotRequest == null)
+            {
+                result.Success = false;
+                result.Message += "Error: createSnapshotRequest is null.";
+                return result;
+            }
+
+            try
+            {
+                // Call the OpenSearch service to create the snapshot
+                var createSnapshotResult = await _openSearchService.CreateSnapshotAsync(
+                    createSnapshotRequest.SnapshotRepo,
+                    createSnapshotRequest.SnapshotName,
+                    createSnapshotRequest.Indices
+                );
+                result.Success = createSnapshotResult.Success;
+                result.Message += createSnapshotResult.Message;
+
+                _logger.LogInformation(result.Message);
+            }
+            catch (Exception e)
+            {
+                result.Success = false;
+                result.Message += $"Error: Failed to create snapshot. Error was: {e.Message}";
+                _logger.LogError(result.Message);
+            }
+            return result;
+        }
 
     }
 

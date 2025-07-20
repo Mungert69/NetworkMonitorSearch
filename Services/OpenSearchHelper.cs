@@ -20,6 +20,16 @@ public class Document
     public string Output { get; set; } = "";
     public List<float> Embedding { get; set; } = new();
 }
+
+public class SecurityBook
+{
+    public string Input { get; set; } = "";
+    public string Output { get; set; } = "";
+    public string Summary { get; set; } = "";
+    public List<float> InputEmbedding { get; set; } = new();
+    public List<float> OutputEmbedding { get; set; } = new();
+    public List<float> SummaryEmbedding { get; set; } = new();
+}
 public class OpenSearchHelper
 {
     private readonly OpenSearchClient _client;
@@ -47,55 +57,105 @@ public class OpenSearchHelper
         return _embeddingGenerator.GenerateEmbedding(text);
     }
 
-    // Method to load documents from JSON and index in OpenSearch
-    public async Task<ResultObj> IndexDocumentsAsync(IEnumerable<Document> documents, string indexName = "")
+    // Method to load documents or securitybooks from JSON and index in OpenSearch
+    public async Task<ResultObj> IndexDocumentsAsync(IEnumerable<object> items, string indexName = "")
     {
         var result = new ResultObj() { Message = " EnsureIndexExistsAsync : " };
         bool oneFail = false;
         try
         {
             if (indexName == "") indexName = _modelParams.DefaultIndex;
-            int docCount=documents.Count();
+            int docCount = items.Count();
             int count = 0;
-            foreach (var document in documents)
+            foreach (var item in items)
             {
                 count++;
-                Console.WriteLine($"Indexing document {count} of {docCount}");
-                // Generate embedding only when needed
-                if (document.Embedding == null || document.Embedding.Count == 0)
+                Console.WriteLine($"Indexing item {count} of {docCount}");
+
+                string documentId = "";
+                object indexObject = null;
+
+                if (indexName == "securitybooks" && item is SecurityBook securityBook)
                 {
-                    document.Embedding = GenerateEmbedding(document.Output);
+                    // Generate embeddings for all fields if needed
+                    if (securityBook.InputEmbedding == null || securityBook.InputEmbedding.Count == 0)
+                    {
+                        securityBook.InputEmbedding = GenerateEmbedding(securityBook.Input);
+                    }
+                    if (securityBook.OutputEmbedding == null || securityBook.OutputEmbedding.Count == 0)
+                    {
+                        securityBook.OutputEmbedding = GenerateEmbedding(securityBook.Output);
+                    }
+                    if (securityBook.SummaryEmbedding == null || securityBook.SummaryEmbedding.Count == 0)
+                    {
+                        securityBook.SummaryEmbedding = GenerateEmbedding(securityBook.Summary);
+                    }
+                    documentId = ComputeSha256Hash(securityBook.Output);
+                    // Check if the document already exists
+                    var existsResponse = await _client.DocumentExistsAsync(DocumentPath<SecurityBook>.Id(documentId), d => d.Index(indexName));
+                    if (existsResponse.Exists)
+                    {
+                        result.Message += $"SecurityBook with ID {documentId} already exists. Skipping indexing.";
+                        continue;
+                    }
+                    indexObject = new
+                    {
+                        input = securityBook.Input,
+                        output = securityBook.Output,
+                        summary = securityBook.Summary,
+                        input_embedding = securityBook.InputEmbedding,
+                        output_embedding = securityBook.OutputEmbedding,
+                        summary_embedding = securityBook.SummaryEmbedding
+                    };
+                }
+                else if (item is Document document)
+                {
+                    // Generate embedding if needed
+                    if (document.Embedding == null || document.Embedding.Count == 0)
+                    {
+                        document.Embedding = GenerateEmbedding(document.Output);
+                    }
+                    documentId = ComputeSha256Hash(document.Output);
+                    // Check if the document already exists
+                    var existsResponse = await _client.DocumentExistsAsync(DocumentPath<Document>.Id(documentId), d => d.Index(indexName));
+                    if (existsResponse.Exists)
+                    {
+                        result.Message += $"Document with ID {documentId} already exists. Skipping indexing.";
+                        continue;
+                    }
+                    indexObject = new
+                    {
+                        input = document.Input,
+                        output = document.Output,
+                        embedding = document.Embedding
+                    };
+                }
+                else
+                {
+                    result.Message += "Unknown item type for indexing.";
+                    oneFail = true;
+                    continue;
                 }
 
-                string documentId = ComputeSha256Hash(document.Output);
-
-                // Check if the document already exists
-                var existsResponse = await _client.DocumentExistsAsync(DocumentPath<Document>.Id(documentId), d => d.Index(indexName));
-
-                if (existsResponse.Exists)
-                {
-                    result.Message += $"Document with ID {documentId} already exists. Skipping indexing.";
-                    continue;  // Skip this document if it already exists
-                }
-
-                // Index the new document
-                var indexResponse = await _client.IndexAsync(new
-                {
-                    input = document.Input,
-                    output = document.Output,
-                    embedding = document.Embedding
-                }, i => i.Index(indexName).Id(documentId));
+                // Index the new document or securitybook
+                var indexResponse = await _client.IndexAsync(indexObject, i => i.Index(indexName).Id(documentId));
 
                 if (!indexResponse.IsValid)
                 {
                     oneFail = true;
-                    result.Message += $"Failed to index document with ID {documentId}: {indexResponse.ServerError}";
+                    result.Message += $"Failed to index item with ID {documentId}: {indexResponse.ServerError}";
                 }
                 else
                 {
-                    result.Message += $"Indexing document ID {documentId} with embedding: {string.Join(",", document.Embedding)}";
+                    if (indexName == "securitybooks")
+                    {
+                        result.Message += $"Indexing SecurityBook ID {documentId} with input_embedding: {string.Join(",", ((SecurityBook)item).InputEmbedding)}, output_embedding: {string.Join(",", ((SecurityBook)item).OutputEmbedding)}, summary_embedding: {string.Join(",", ((SecurityBook)item).SummaryEmbedding)}";
+                    }
+                    else
+                    {
+                        result.Message += $"Indexing item ID {documentId} with embedding: {string.Join(",", ((Document)item).Embedding)}";
+                    }
                 }
-
             }
             result.Success = !oneFail;
         }
@@ -192,29 +252,80 @@ public class OpenSearchHelper
             if (!existsResponse.Exists)
             {
                 // Use low-level client to create the index with the knn_vector mapping and knn enabled
-                var createIndexResponse = await _client.LowLevel.Indices.CreateAsync<StringResponse>(indexName, PostData.String(@"
-            {
-                ""settings"": {
-                    ""index"": {
-                        ""knn"": true
-                    }
-                },
-                ""mappings"": {
-                    ""properties"": {
-                        ""input"": { ""type"": ""text"" },
-                        ""output"": { ""type"": ""text"" },
-                        ""embedding"": { 
-                            ""type"": ""knn_vector"", 
-                            ""dimension"": " + _modelParams.BertModelVecDim + @",
-                            ""method"": {
-                                ""name"": ""hnsw"",
-                                ""space_type"": ""l2"",
-                                ""engine"": ""faiss""
+                string mapping;
+                if (indexName == "securitybooks")
+                {
+                    mapping = @"
+                    {
+                        ""settings"": {
+                            ""index"": {
+                                ""knn"": true
+                            }
+                        },
+                        ""mappings"": {
+                            ""properties"": {
+                                ""input"": { ""type"": ""text"" },
+                                ""output"": { ""type"": ""text"" },
+                                ""summary"": { ""type"": ""text"" },
+                                ""input_embedding"": { 
+                                    ""type"": ""knn_vector"", 
+                                    ""dimension"": " + _modelParams.BertModelVecDim + @",
+                                    ""method"": {
+                                        ""name"": ""hnsw"",
+                                        ""space_type"": ""l2"",
+                                        ""engine"": ""faiss""
+                                    }
+                                },
+                                ""output_embedding"": { 
+                                    ""type"": ""knn_vector"", 
+                                    ""dimension"": " + _modelParams.BertModelVecDim + @",
+                                    ""method"": {
+                                        ""name"": ""hnsw"",
+                                        ""space_type"": ""l2"",
+                                        ""engine"": ""faiss""
+                                    }
+                                },
+                                ""summary_embedding"": { 
+                                    ""type"": ""knn_vector"", 
+                                    ""dimension"": " + _modelParams.BertModelVecDim + @",
+                                    ""method"": {
+                                        ""name"": ""hnsw"",
+                                        ""space_type"": ""l2"",
+                                        ""engine"": ""faiss""
+                                    }
+                                }
                             }
                         }
-                    }
+                    }";
                 }
-            }"));
+                else
+                {
+                    mapping = @"
+                    {
+                        ""settings"": {
+                            ""index"": {
+                                ""knn"": true
+                            }
+                        },
+                        ""mappings"": {
+                            ""properties"": {
+                                ""input"": { ""type"": ""text"" },
+                                ""output"": { ""type"": ""text"" },
+                                ""embedding"": { 
+                                    ""type"": ""knn_vector"", 
+                                    ""dimension"": " + _modelParams.BertModelVecDim + @",
+                                    ""method"": {
+                                        ""name"": ""hnsw"",
+                                        ""space_type"": ""l2"",
+                                        ""engine"": ""faiss""
+                                    }
+                                }
+                            }
+                        }
+                    }";
+                }
+
+                var createIndexResponse = await _client.LowLevel.Indices.CreateAsync<StringResponse>(indexName, PostData.String(mapping));
 
                 if (!createIndexResponse.Success)
                 {
