@@ -14,80 +14,91 @@ namespace NetworkMonitor.Search.Services
         private readonly InferenceSession _session;
         private readonly AutoTokenizer _tokenizer;
         private readonly string _modelPath;
+        private int _defaultMinTokens;
 
-        public EmbeddingGenerator(string modelDir)
+        private static readonly object _embeddingLock = new object();
+
+        public EmbeddingGenerator(string modelDir, int defaultMinTokens)
         {
             // Load the ONNX model with restricted CPU threads
             _modelPath = Path.Combine(modelDir, "model.onnx");
             var options = new SessionOptions();
             options.IntraOpNumThreads = 2;
+            _defaultMinTokens = defaultMinTokens;
             _session = new InferenceSession(_modelPath, options);
 
-            // Initialize the tokenizer
+            // Initialize the tokenizer with default min length
             _tokenizer = new AutoTokenizer(modelDir);
         }
 
-        public List<float> GenerateEmbedding(string text)
+        public List<float> GenerateEmbedding(string text, int? overrideMaxTokens = null)
         {
-            // Tokenize the input text
-            var tokenizedInput = _tokenizer.Tokenize(text);
-            foreach (var kv in _session.InputMetadata)
-                Console.WriteLine($"{kv.Key} → {kv.Value.ElementType}, shape: [{string.Join(", ", kv.Value.Dimensions)}]");
-
-            // Convert to tensors
-            int seqLen = tokenizedInput.InputIds.Count;
-
-            var inputIdsTensor = new DenseTensor<long>(tokenizedInput.InputIds.ToArray(), new[] { 1, seqLen });
-            var attentionMaskTensor = new DenseTensor<long>(tokenizedInput.AttentionMask.ToArray(), new[] { 1, seqLen });
-
-            // QWEN and some newer models expect position_ids:
-            var positionIdsArr = new long[seqLen];
-            for (int i = 0; i < seqLen; i++)
-                positionIdsArr[i] = i;
-            var positionIdsTensor = new DenseTensor<long>(positionIdsArr, new[] { 1, seqLen });
-
-
-            // Prepare inputs (include position_ids if model expects it)
-            // Prepare inputs
-            var inputs = new List<NamedOnnxValue>
-{
-    NamedOnnxValue.CreateFromTensor("input_ids", inputIdsTensor),
-    NamedOnnxValue.CreateFromTensor("attention_mask", attentionMaskTensor),
-    NamedOnnxValue.CreateFromTensor("position_ids", positionIdsTensor)
-            };
-
-
-            using var results = _session.Run(inputs);
-
-            // Debug: print all returned outputs
-            foreach (var result in results)
+            lock (_embeddingLock)
             {
-                Console.WriteLine($"ONNX output: {result.Name}, type: {result.Value?.GetType()}");
-            }
+                int maxTokenLength = _defaultMinTokens;
+                if (overrideMaxTokens != null) maxTokenLength = (int)overrideMaxTokens;
+              
+                // Tokenize the input text
+                var tokenizedInput = _tokenizer.Tokenize(text, maxTokenLength);
 
-            // Try to find a float32 or float16 tensor (embedding) in the outputs
-            var embeddingResultFloat = results.FirstOrDefault(r => r.Value is Tensor<float>);
-            if (embeddingResultFloat != null)
-            {
-                var embeddingsTensor = embeddingResultFloat.AsTensor<float>();
-                return PoolEmbeddings(embeddingsTensor);
-            }
+                foreach (var kv in _session.InputMetadata)
+                    Console.WriteLine($"{kv.Key} → {kv.Value.ElementType}, shape: [{string.Join(", ", kv.Value.Dimensions)}]");
 
-            var embeddingResultF16 = results.FirstOrDefault(r => r.Value is Tensor<Float16>);
-            if (embeddingResultF16 != null)
-            {
-                var embeddingsTensorF16 = embeddingResultF16.AsTensor<Float16>();
-                return PoolEmbeddingsF16(embeddingsTensorF16);
-            }
-            var embeddingResultInt8 = results.FirstOrDefault(r => r.Value is Tensor<byte>);
-            if (embeddingResultInt8 != null)
-            {
-                var embeddingsTensorInt8 = embeddingResultInt8.AsTensor<byte>();
+                // Convert to tensors
+                int seqLen = tokenizedInput.InputIds.Count;
 
-                return PoolEmbeddingsUInt8(embeddingsTensorInt8);
-            }
+                var inputIdsTensor = new DenseTensor<long>(tokenizedInput.InputIds.ToArray(), new[] { 1, seqLen });
+                var attentionMaskTensor = new DenseTensor<long>(tokenizedInput.AttentionMask.ToArray(), new[] { 1, seqLen });
 
-            throw new Exception("No float32 ,float16 or int8 tensor found in ONNX outputs!");
+                // QWEN and some newer models expect position_ids:
+                var positionIdsArr = new long[seqLen];
+                for (int i = 0; i < seqLen; i++)
+                    positionIdsArr[i] = i;
+                var positionIdsTensor = new DenseTensor<long>(positionIdsArr, new[] { 1, seqLen });
+
+
+                // Prepare inputs (include position_ids if model expects it)
+                // Prepare inputs
+                var inputs = new List<NamedOnnxValue>
+                {
+                    NamedOnnxValue.CreateFromTensor("input_ids", inputIdsTensor),
+                    NamedOnnxValue.CreateFromTensor("attention_mask", attentionMaskTensor),
+                    NamedOnnxValue.CreateFromTensor("position_ids", positionIdsTensor)
+                };
+
+
+                using var results = _session.Run(inputs);
+
+                // Debug: print all returned outputs
+                foreach (var result in results)
+                {
+                    Console.WriteLine($"ONNX output: {result.Name}, type: {result.Value?.GetType()}");
+                }
+
+                // Try to find a float32 or float16 tensor (embedding) in the outputs
+                var embeddingResultFloat = results.FirstOrDefault(r => r.Value is Tensor<float>);
+                if (embeddingResultFloat != null)
+                {
+                    var embeddingsTensor = embeddingResultFloat.AsTensor<float>();
+                    return PoolEmbeddings(embeddingsTensor);
+                }
+
+                var embeddingResultF16 = results.FirstOrDefault(r => r.Value is Tensor<Float16>);
+                if (embeddingResultF16 != null)
+                {
+                    var embeddingsTensorF16 = embeddingResultF16.AsTensor<Float16>();
+                    return PoolEmbeddingsF16(embeddingsTensorF16);
+                }
+                var embeddingResultInt8 = results.FirstOrDefault(r => r.Value is Tensor<byte>);
+                if (embeddingResultInt8 != null)
+                {
+                    var embeddingsTensorInt8 = embeddingResultInt8.AsTensor<byte>();
+
+                    return PoolEmbeddingsUInt8(embeddingsTensorInt8);
+                }
+
+                throw new Exception("No float32 ,float16 or int8 tensor found in ONNX outputs!");
+            }
         }
 
         private List<float> PoolEmbeddings(Tensor<float> embeddingsTensor)

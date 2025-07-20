@@ -10,7 +10,6 @@ namespace NetworkMonitor.Search.Services
     public class AutoTokenizer
     {
         private readonly Tokenizer _tokenizer;
-        private readonly int _maxLength;
         private readonly uint _padTokenId;
 
         public AutoTokenizer(string modelDir)
@@ -21,7 +20,6 @@ namespace NetworkMonitor.Search.Services
 
             // Load config for max length and pad token
             var cfg = JObject.Parse(File.ReadAllText(Path.Combine(modelDir, "tokenizer_config.json")));
-            _maxLength = 512;
 
             // Get pad token string
             var padToken = cfg["pad_token"]?.Value<string>();
@@ -55,20 +53,20 @@ namespace NetworkMonitor.Search.Services
                 throw new Exception($"Pad token '{padToken}' not found in vocabulary.");
         }
 
-        public TokenizedInput Tokenize(string text)
+        public TokenizedInput Tokenize(string text, int maxLength)
         {
             var ids = _tokenizer.Encode(text); // ids is uint[]
-            int len = Math.Min(ids.Length, _maxLength);
+            int len = Math.Min(ids.Length, maxLength);
 
-            var inputIds = new long[_maxLength];
-            var attentionMask = new long[_maxLength];
+            var inputIds = new long[maxLength];
+            var attentionMask = new long[maxLength];
 
             for (int i = 0; i < len; i++)
             {
                 inputIds[i] = ids[i];
                 attentionMask[i] = 1;
             }
-            for (int i = len; i < _maxLength; i++)
+            for (int i = len; i < maxLength; i++)
             {
                 inputIds[i] = _padTokenId;
                 attentionMask[i] = 0;
@@ -78,8 +76,17 @@ namespace NetworkMonitor.Search.Services
             {
                 InputIds = inputIds.ToList(),
                 AttentionMask = attentionMask.ToList(),
-                TokenTypeIds = Enumerable.Repeat(0L, _maxLength).ToList()
+                TokenTypeIds = Enumerable.Repeat(0L, maxLength).ToList()
             };
+        }
+
+        /// <summary>
+        /// Returns the number of tokens the tokenizer would produce for the given text, without padding or truncation.
+        /// </summary>
+        public int CountTokens(string text)
+        {
+            var ids = _tokenizer.Encode(text);
+            return ids.Length;
         }
 
 

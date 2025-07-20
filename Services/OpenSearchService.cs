@@ -31,7 +31,10 @@ namespace NetworkMonitor.Search.Services
         private OSModelParams _modelParams = new OSModelParams();
         private readonly ILogger _logger;
         private readonly IRabbitRepo _rabbitRepo;
+        private readonly string _dataDir;
         private readonly MemoryCache _cache = new MemoryCache(new MemoryCacheOptions());
+        private const int MaxTokenLengthCap = 4096;
+        private const int MinTokenLengthCap = 512;
 
         public OpenSearchService(ILogger<OpenSearchService> logger, ISystemParamsHelper systemParamsHelper, IRabbitRepo rabbitRepo)
         {
@@ -44,7 +47,9 @@ namespace NetworkMonitor.Search.Services
             _modelParams.Url = systemParamsHelper.GetMLParams().OpenSearchUrl;
             _modelParams.DefaultIndex = systemParamsHelper.GetMLParams().OpenSearchDefaultIndex;
             _rabbitRepo = rabbitRepo;
-            _openSearchHelper = new OpenSearchHelper(_modelParams);
+            _dataDir = systemParamsHelper.GetSystemParams().DataDir;
+            // Always use default (no maxTokenLength) for search/query, only pass for create index
+            _openSearchHelper = new OpenSearchHelper(_modelParams,MinTokenLengthCap,MaxTokenLengthCap);
         }
 
         // Create a snapshot for the given indices
@@ -136,6 +141,23 @@ namespace NetworkMonitor.Search.Services
             return Task.CompletedTask;
         }
 
+        // Store the dataSamples for use in embedding generator initialization
+        private IEnumerable<string>? _pendingDataSamples = null;
+
+        private int CalculateMaxTokenizedLength(string modelDir, IEnumerable<string> dataSamples)
+        {
+            var tempTokenizer = new AutoTokenizer(modelDir);
+            int maxLen = MinTokenLengthCap;
+            foreach (var text in dataSamples)
+            {
+                int tokenCount = tempTokenizer.CountTokens(text);
+                if (tokenCount > maxLen)
+                    maxLen = tokenCount;
+            }
+            // Cap at the value defined in EmbeddingGenerator
+            return Math.Min(maxLen, MaxTokenLengthCap);
+        }
+
         public async Task<ResultObj> CreateIndexAsync(CreateIndexRequest createIndexRequest)
         {
             var result = new ResultObj();
@@ -185,6 +207,7 @@ namespace NetworkMonitor.Search.Services
                 }
                 // Dynamically deserialize based on index name
                 List<object> items = null;
+                IEnumerable<string> dataSamples = null;
                 if (createIndexRequest.IndexName == "securitybooks")
                 {
                     var securityBooks = JsonConvert.DeserializeObject<List<SecurityBook>>(jsonContent);
@@ -194,6 +217,7 @@ namespace NetworkMonitor.Search.Services
                         return result;
                     }
                     items = securityBooks.Cast<object>().ToList();
+                    dataSamples = securityBooks.SelectMany(sb => new[] { sb.Input, sb.Output, sb.Summary }).Where(s => !string.IsNullOrWhiteSpace(s));
                 }
                 else
                 {
@@ -204,13 +228,21 @@ namespace NetworkMonitor.Search.Services
                         return result;
                     }
                     items = documents.Cast<object>().ToList();
+                    dataSamples = documents.SelectMany(d => new[] { d.Input, d.Output }).Where(s => !string.IsNullOrWhiteSpace(s));
                 }
 
                 Console.WriteLine("JSON deserialization succeeded. Proceeding with indexing.");
 
+                // If we have new dataSamples, calculate max token length
+                int? maxTokenLength = null;
+                if (dataSamples != null)
+                {
+                    maxTokenLength = CalculateMaxTokenizedLength(_modelParams.BertModelDir, dataSamples);
+                }
+
                 var resultEn = await _openSearchHelper.EnsureIndexExistsAsync(indexName: createIndexRequest.IndexName, recreateIndex: createIndexRequest.RecreateIndex);
                 if (!resultEn.Success) return resultEn;
-                var resultIn = await _openSearchHelper.IndexDocumentsAsync(items, createIndexRequest.IndexName);
+                var resultIn = await _openSearchHelper.IndexDocumentsAsync(items, createIndexRequest.IndexName, maxTokenLength);
                 createIndexRequest.Success = resultEn.Success && resultIn.Success;
                 createIndexRequest.Message += resultEn.Message + resultIn.Message;
 
@@ -223,6 +255,66 @@ namespace NetworkMonitor.Search.Services
             {
                 result.Success = false;
                 result.Message += $"Error: Failed to create index '{createIndexRequest.IndexName}'. Exception: {ex.Message}";
+            }
+
+            return result;
+        }
+        /// <summary>
+        /// Reads a data directory, treats each subdirectory as an index name, and for each JSON file in each subdirectory,
+        /// runs CreateIndexAsync for that file and index, using parameters from the provided CreateIndexRequest.
+        /// </summary>
+        /// <param name="createIndexRequest">A CreateIndexRequest object with parameters to use (AppID, AuthKey, RecreateIndex, etc). Set JsonFile and IndexName to empty.</param>
+        /// <returns>A ResultObj summarizing the operation.</returns>
+        public async Task<ResultObj> CreateIndicesFromDataDirAsync(CreateIndexRequest createIndexRequest)
+        {
+            var result = new ResultObj();
+            result.Success = true;
+            result.Message = $"Starting CreateIndicesFromDataDirAsync for {createIndexRequest.JsonFile}\n";
+            // TODO we need to search the directory in the same folder as the exexutable contxt called data for dirs . this 
+            string dataDir = _dataDir;
+            if (string.IsNullOrWhiteSpace(dataDir) || !Directory.Exists(dataDir))
+            {
+                result.Success = false;
+                result.Message += $"Error: Data Directory '{dataDir}' does not exist.";
+                return result;
+            }
+
+            var indexDirs = Directory.GetDirectories(dataDir);
+            if (indexDirs.Length == 0)
+            {
+                result.Message += "No subdirectories (indices) found in data dir.";
+                return result;
+            }
+
+            foreach (var indexDir in indexDirs)
+            {
+                var indexName = Path.GetFileName(indexDir);
+                var jsonFiles = Directory.GetFiles(indexDir, "*.json");
+                if (jsonFiles.Length == 0)
+                {
+                    result.Message += $"Index '{indexName}': No JSON files found, skipping.\n";
+                    continue;
+                }
+
+                foreach (var jsonFile in jsonFiles)
+                {
+                    // Clone the request and set the index and file for this run
+                    var req = new CreateIndexRequest
+                    {
+                        IndexName = indexName,
+                        JsonFile = jsonFile,
+                        AppID = createIndexRequest.AppID,
+                        AuthKey = createIndexRequest.AuthKey,
+                        RecreateIndex = createIndexRequest.RecreateIndex,
+                        JsonMapping = "", // always use file for this
+                        MessageID = createIndexRequest.MessageID
+                    };
+
+                    var createResult = await CreateIndexAsync(req);
+                    result.Message += $"Index '{indexName}', File '{Path.GetFileName(jsonFile)}': {createResult.Message}\n";
+                    if (!createResult.Success)
+                        result.Success = false;
+                }
             }
 
             return result;
@@ -320,65 +412,5 @@ namespace NetworkMonitor.Search.Services
         }
 
 
-        /// <summary>
-        /// Reads a data directory, treats each subdirectory as an index name, and for each JSON file in each subdirectory,
-        /// runs CreateIndexAsync for that file and index, using parameters from the provided CreateIndexRequest.
-        /// </summary>
-        /// <param name="createIndexRequest">A CreateIndexRequest object with parameters to use (AppID, AuthKey, RecreateIndex, etc). Set JsonFile and IndexName to empty.</param>
-        /// <returns>A ResultObj summarizing the operation.</returns>
-        public async Task<ResultObj> CreateIndicesFromDataDirAsync(CreateIndexRequest createIndexRequest)
-        {
-            var result = new ResultObj();
-            result.Success = true;
-            result.Message = $"Starting CreateIndicesFromDataDirAsync for {createIndexRequest.JsonFile}\n";
-
-            string dataDir = createIndexRequest.JsonFile;
-            if (string.IsNullOrWhiteSpace(dataDir) || !Directory.Exists(dataDir))
-            {
-                result.Success = false;
-                result.Message += $"Error: Directory '{dataDir}' does not exist.";
-                return result;
-            }
-
-            var indexDirs = Directory.GetDirectories(dataDir);
-            if (indexDirs.Length == 0)
-            {
-                result.Message += "No subdirectories (indices) found in data dir.";
-                return result;
-            }
-
-            foreach (var indexDir in indexDirs)
-            {
-                var indexName = Path.GetFileName(indexDir);
-                var jsonFiles = Directory.GetFiles(indexDir, "*.json");
-                if (jsonFiles.Length == 0)
-                {
-                    result.Message += $"Index '{indexName}': No JSON files found, skipping.\n";
-                    continue;
-                }
-
-                foreach (var jsonFile in jsonFiles)
-                {
-                    // Clone the request and set the index and file for this run
-                    var req = new CreateIndexRequest
-                    {
-                        IndexName = indexName,
-                        JsonFile = jsonFile,
-                        AppID = createIndexRequest.AppID,
-                        AuthKey = createIndexRequest.AuthKey,
-                        RecreateIndex = createIndexRequest.RecreateIndex,
-                        JsonMapping = "", // always use file for this
-                        MessageID = createIndexRequest.MessageID
-                    };
-
-                    var createResult = await CreateIndexAsync(req);
-                    result.Message += $"Index '{indexName}', File '{Path.GetFileName(jsonFile)}': {createResult.Message}\n";
-                    if (!createResult.Success)
-                        result.Success = false;
-                }
-            }
-
-            return result;
-        }
     }
 }

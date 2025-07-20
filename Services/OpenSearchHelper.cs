@@ -33,12 +33,16 @@ public class SecurityBook
 public class OpenSearchHelper
 {
     private readonly OpenSearchClient _client;
-    private readonly EmbeddingGenerator _embeddingGenerator;
+    private EmbeddingGenerator _embeddingGenerator;
     private OSModelParams _modelParams;
+    private int _minTokenLengthCap;
+    private int _maxTokenLengthCap;
 
-    public OpenSearchHelper(OSModelParams modelParams)
+    public OpenSearchHelper(OSModelParams modelParams, int minTokenLengthCap, int maxTokenLength)
     {
         _modelParams = modelParams;
+        _minTokenLengthCap = minTokenLengthCap;
+        _maxTokenLengthCap = maxTokenLength;
         // Initialize OpenSearch client
         var settings = new ConnectionSettings(_modelParams.SearchUri)
             .DefaultIndex(_modelParams.DefaultIndex)
@@ -47,18 +51,19 @@ public class OpenSearchHelper
 
         _client = new OpenSearchClient(settings);
 
-        // Initialize the embedding generator
-        _embeddingGenerator = new EmbeddingGenerator(_modelParams.BertModelDir);
+        // Always use default (no maxTokenLength) for search/query, only pass for create index
+        _embeddingGenerator = new EmbeddingGenerator(_modelParams.BertModelDir, minTokenLengthCap);
     }
 
     // Method to generate embeddings for a document
-    private List<float> GenerateEmbedding(string text)
+    private List<float> GenerateEmbedding(string text, int? maxTokenLength = null)
     {
-        return _embeddingGenerator.GenerateEmbedding(text);
+        // Always use the same instance, but optionally override maxTokenLength for this call
+        return _embeddingGenerator.GenerateEmbedding(text, maxTokenLength);
     }
 
     // Method to load documents or securitybooks from JSON and index in OpenSearch
-    public async Task<ResultObj> IndexDocumentsAsync(IEnumerable<object> items, string indexName = "")
+    public async Task<ResultObj> IndexDocumentsAsync(IEnumerable<object> items, string indexName = "", int? maxTokenLength = null)
     {
         var result = new ResultObj() { Message = " EnsureIndexExistsAsync : " };
         bool oneFail = false;
@@ -80,15 +85,15 @@ public class OpenSearchHelper
                     // Generate embeddings for all fields if needed
                     if (securityBook.InputEmbedding == null || securityBook.InputEmbedding.Count == 0)
                     {
-                        securityBook.InputEmbedding = GenerateEmbedding(securityBook.Input);
+                        securityBook.InputEmbedding = GenerateEmbedding(securityBook.Input, maxTokenLength);
                     }
                     if (securityBook.OutputEmbedding == null || securityBook.OutputEmbedding.Count == 0)
                     {
-                        securityBook.OutputEmbedding = GenerateEmbedding(securityBook.Output);
+                        securityBook.OutputEmbedding = GenerateEmbedding(securityBook.Output, maxTokenLength);
                     }
                     if (securityBook.SummaryEmbedding == null || securityBook.SummaryEmbedding.Count == 0)
                     {
-                        securityBook.SummaryEmbedding = GenerateEmbedding(securityBook.Summary);
+                        securityBook.SummaryEmbedding = GenerateEmbedding(securityBook.Summary, maxTokenLength);
                     }
                     documentId = ComputeSha256Hash(securityBook.Output);
                     // Check if the document already exists
@@ -113,7 +118,7 @@ public class OpenSearchHelper
                     // Generate embedding if needed
                     if (document.Embedding == null || document.Embedding.Count == 0)
                     {
-                        document.Embedding = GenerateEmbedding(document.Output);
+                        document.Embedding = GenerateEmbedding(document.Output, maxTokenLength);
                     }
                     documentId = ComputeSha256Hash(document.Output);
                     // Check if the document already exists
@@ -234,6 +239,73 @@ public class OpenSearchHelper
         if (searchResponse == null) searchResponse = new SearchResponseObj();
         return searchResponse;
     }
+
+    public async Task<SearchResponseObj> MultiFieldKnnSearchAsync(
+    string queryText,
+    int kPerField = 10,
+    Dictionary<string, float>? fieldWeights = null,
+    string indexName = "securitybooks")
+    {
+        var queryEmbedding = GenerateEmbedding(queryText);
+        if (queryEmbedding.Count == 0)
+            throw new Exception("Failed to generate query embedding.");
+
+        // Default equal weights if none provided
+        fieldWeights ??= new Dictionary<string, float>
+        {
+            ["input_embedding"] = 1f,
+            ["output_embedding"] = 1f,
+            ["summary_embedding"] = 1f
+        };
+
+        var shouldClauses = new List<object>();
+        foreach (var (field, weight) in fieldWeights)
+        {
+            shouldClauses.Add(new
+            {
+                function_score = new
+                {
+                    knn = new Dictionary<string, object>
+                    {
+                        [field] = new { vector = queryEmbedding, k = kPerField }
+                    },
+                    weight
+                }
+            });
+        }
+
+        var requestBody = new
+        {
+            size = kPerField,
+            query = new
+            {
+                @bool = new { should = shouldClauses }
+            }
+        };
+
+        var json = JsonConvert.SerializeObject(requestBody);
+        using var client = new HttpClient(new HttpClientHandler
+        {
+            ServerCertificateCustomValidationCallback = (m, c, ch, e) => true
+        })
+        {
+            BaseAddress = _modelParams.SearchUri
+        };
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Basic", Convert.ToBase64String(
+                Encoding.ASCII.GetBytes($"{_modelParams.User}:{_modelParams.Key}")));
+
+        var response = await client.PostAsync($"/{indexName}/_search",
+            new StringContent(json, Encoding.UTF8, "application/json"));
+
+        if (!response.IsSuccessStatusCode)
+            throw new Exception($"Search failed: {response.ReasonPhrase}");
+
+        var content = await response.Content.ReadAsStringAsync();
+        return JsonConvert.DeserializeObject<SearchResponseObj>(content) ??
+               new SearchResponseObj();
+    }
+
     public async Task<ResultObj> EnsureIndexExistsAsync(string indexName = "", bool recreateIndex = false)
     {
         var result = new ResultObj() { Message = " EnsureIndexExistsAsync : " };
