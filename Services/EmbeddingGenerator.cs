@@ -14,32 +14,26 @@ namespace NetworkMonitor.Search.Services
         private readonly InferenceSession _session;
         private readonly AutoTokenizer _tokenizer;
         private readonly string _modelPath;
-        private int _defaultMinTokens;
-
+       
         private static readonly object _embeddingLock = new object();
 
-        public EmbeddingGenerator(string modelDir, int defaultMinTokens)
+        public EmbeddingGenerator(string modelDir)
         {
             // Load the ONNX model with restricted CPU threads
             _modelPath = Path.Combine(modelDir, "model.onnx");
             var options = new SessionOptions();
             options.IntraOpNumThreads = 2;
-            _defaultMinTokens = defaultMinTokens;
             _session = new InferenceSession(_modelPath, options);
 
             // Initialize the tokenizer with default min length
             _tokenizer = new AutoTokenizer(modelDir);
         }
 
-        public List<float> GenerateEmbedding(string text, int? overrideMaxTokens = null)
+        public List<float> GenerateEmbedding(string text, int maxTokens)
         {
             lock (_embeddingLock)
             {
-                int maxTokenLength = _defaultMinTokens;
-                if (overrideMaxTokens != null) maxTokenLength = (int)overrideMaxTokens;
-              
-                // Tokenize the input text
-                var tokenizedInput = _tokenizer.Tokenize(text, maxTokenLength);
+               var tokenizedInput = _tokenizer.Tokenize(text, maxTokens);
 
                 foreach (var kv in _session.InputMetadata)
                     Console.WriteLine($"{kv.Key} → {kv.Value.ElementType}, shape: [{string.Join(", ", kv.Value.Dimensions)}]");
@@ -199,10 +193,10 @@ namespace NetworkMonitor.Search.Services
             return dot / (float)(Math.Sqrt(normA) * Math.Sqrt(normB));
         }
 
-        public void CompareEmbeddings(EmbeddingGenerator floatGen, EmbeddingGenerator quantGen, string text)
+        public void CompareEmbeddings(EmbeddingGenerator floatGen, EmbeddingGenerator quantGen, string text, int maxTokens)
         {
-            var floatEmb = floatGen.GenerateEmbedding(text);
-            var quantEmb = quantGen.GenerateEmbedding(text);
+            var floatEmb = floatGen.GenerateEmbedding(text, maxTokens);
+            var quantEmb = quantGen.GenerateEmbedding(text, maxTokens);
             PrintEmbedding("FLOAT32", floatEmb);
             PrintEmbedding("UINT8 ", quantEmb);
             Console.WriteLine($"Cosine similarity: {CosineSim(floatEmb, quantEmb)}");

@@ -35,14 +35,11 @@ public class OpenSearchHelper
     private readonly OpenSearchClient _client;
     private EmbeddingGenerator _embeddingGenerator;
     private OSModelParams _modelParams;
-    private int _minTokenLengthCap;
-    private int _maxTokenLengthCap;
 
-    public OpenSearchHelper(OSModelParams modelParams, int minTokenLengthCap, int maxTokenLength)
+
+    public OpenSearchHelper(OSModelParams modelParams)
     {
         _modelParams = modelParams;
-        _minTokenLengthCap = minTokenLengthCap;
-        _maxTokenLengthCap = maxTokenLength;
         // Initialize OpenSearch client
         var settings = new ConnectionSettings(_modelParams.SearchUri)
             .DefaultIndex(_modelParams.DefaultIndex)
@@ -52,24 +49,23 @@ public class OpenSearchHelper
         _client = new OpenSearchClient(settings);
 
         // Always use default (no maxTokenLength) for search/query, only pass for create index
-        _embeddingGenerator = new EmbeddingGenerator(_modelParams.BertModelDir, minTokenLengthCap);
+        _embeddingGenerator = new EmbeddingGenerator(_modelParams.BertModelDir);
     }
 
     // Method to generate embeddings for a document
-    private List<float> GenerateEmbedding(string text, int? maxTokenLength = null)
+    private List<float> GenerateEmbedding(string text, int maxTokenLength)
     {
-        // Always use the same instance, but optionally override maxTokenLength for this call
+        // Always use the same instance, must pass a value for maxTokenLength
         return _embeddingGenerator.GenerateEmbedding(text, maxTokenLength);
     }
 
     // Method to load documents or securitybooks from JSON and index in OpenSearch
-    public async Task<ResultObj> IndexDocumentsAsync(IEnumerable<object> items, string indexName = "", int? maxTokenLength = null)
+    public async Task<ResultObj> IndexDocumentsAsync(IEnumerable<object> items,  string indexName,int maxTokenLength  )
     {
         var result = new ResultObj() { Message = " EnsureIndexExistsAsync : " };
         bool oneFail = false;
         try
         {
-            if (indexName == "") indexName = _modelParams.DefaultIndex;
             int docCount = items.Count();
             int count = 0;
             foreach (var item in items)
@@ -173,11 +169,10 @@ public class OpenSearchHelper
     }
 
     // Method to search for similar documents using precomputed embeddings
-    public async Task<SearchResponseObj> SearchDocumentsAsync(string queryText, string indexName = "")
+    public async Task<SearchResponseObj> SearchDocumentsAsync(string queryText, string indexName , int maxTokenLength )
     {
-        if (indexName == "") indexName = _modelParams.DefaultIndex;
-        // Generate embedding for the query text
-        var queryEmbedding = GenerateEmbedding(queryText);
+        // Generate embedding for the query text using the same maxTokenLength as indexing
+        var queryEmbedding = GenerateEmbedding(queryText, maxTokenLength);
         var searchResponse = new SearchResponseObj();
 
         if (queryEmbedding.Count == 0)
@@ -244,9 +239,12 @@ public class OpenSearchHelper
     string queryText,
     int kPerField = 10,
     Dictionary<string, float>? fieldWeights = null,
-    string indexName = "securitybooks")
+    string indexName = "securitybooks",
+    int maxTokenLength = 512)
     {
-        var queryEmbedding = GenerateEmbedding(queryText);
+        // Generate embedding for the query text using the same maxTokenLength as indexing
+        var queryEmbedding = GenerateEmbedding(queryText, maxTokenLength);
+
         if (queryEmbedding.Count == 0)
             throw new Exception("Failed to generate query embedding.");
 

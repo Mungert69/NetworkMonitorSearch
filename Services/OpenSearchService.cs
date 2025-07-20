@@ -15,7 +15,6 @@ namespace NetworkMonitor.Search.Services
     public interface IOpenSearchService
     {
         Task Init();
-        Task<ResultObj> CreateIndexAsync(CreateIndexRequest createIndexRequest);
         Task<ResultObj> QueryIndexAsync(QueryIndexRequest queryIndexRequest);
 
         // New methods for snapshot and bulk index creation
@@ -34,7 +33,7 @@ namespace NetworkMonitor.Search.Services
         private readonly string _dataDir;
         private readonly MemoryCache _cache = new MemoryCache(new MemoryCacheOptions());
         private const int MaxTokenLengthCap = 4096;
-        private const int MinTokenLengthCap = 512;
+        private const int MinTokenLengthCap = 128;
 
         public OpenSearchService(ILogger<OpenSearchService> logger, ISystemParamsHelper systemParamsHelper, IRabbitRepo rabbitRepo)
         {
@@ -49,7 +48,7 @@ namespace NetworkMonitor.Search.Services
             _rabbitRepo = rabbitRepo;
             _dataDir = systemParamsHelper.GetSystemParams().DataDir;
             // Always use default (no maxTokenLength) for search/query, only pass for create index
-            _openSearchHelper = new OpenSearchHelper(_modelParams,MinTokenLengthCap,MaxTokenLengthCap);
+            _openSearchHelper = new OpenSearchHelper(_modelParams);
         }
 
         // Create a snapshot for the given indices
@@ -144,21 +143,41 @@ namespace NetworkMonitor.Search.Services
         // Store the dataSamples for use in embedding generator initialization
         private IEnumerable<string>? _pendingDataSamples = null;
 
-        private int CalculateMaxTokenizedLength(string modelDir, IEnumerable<string> dataSamples)
+        // Store maxTokens per index
+        private readonly Dictionary<string, int> _indexMaxTokens = new();
+
+
+
+        private void SaveIndexMaxTokens(string indexName, int maxTokens)
         {
-            var tempTokenizer = new AutoTokenizer(modelDir);
-            int maxLen = MinTokenLengthCap;
-            foreach (var text in dataSamples)
-            {
-                int tokenCount = tempTokenizer.CountTokens(text);
-                if (tokenCount > maxLen)
-                    maxLen = tokenCount;
-            }
-            // Cap at the value defined in EmbeddingGenerator
-            return Math.Min(maxLen, MaxTokenLengthCap);
+            // Save in memory
+            _indexMaxTokens[indexName] = maxTokens;
+            // Persist to disk (simple JSON file per index)
+            var configDir = Path.Combine(_dataDir, "index_config");
+            Directory.CreateDirectory(configDir);
+            var file = Path.Combine(configDir, $"{indexName}_maxtokens.json");
+            File.WriteAllText(file, JsonConvert.SerializeObject(new { maxTokens }));
         }
 
-        public async Task<ResultObj> CreateIndexAsync(CreateIndexRequest createIndexRequest)
+        private int? LoadIndexMaxTokens(string indexName)
+        {
+            // Try in-memory first
+            if (_indexMaxTokens.TryGetValue(indexName, out var val))
+                return val;
+            // Try disk
+            var configDir = Path.Combine(_dataDir, "index_config");
+            var file = Path.Combine(configDir, $"{indexName}_maxtokens.json");
+            if (File.Exists(file))
+            {
+                var obj = JsonConvert.DeserializeObject<dynamic>(File.ReadAllText(file));
+                int loaded = (int)obj.maxTokens;
+                _indexMaxTokens[indexName] = loaded;
+                return loaded;
+            }
+            return null;
+        }
+
+        private async Task<ResultObj> CreateIndexAsync(CreateIndexRequest createIndexRequest, int maxTokenLength)
         {
             var result = new ResultObj();
             result.Success = false;
@@ -207,7 +226,6 @@ namespace NetworkMonitor.Search.Services
                 }
                 // Dynamically deserialize based on index name
                 List<object> items = null;
-                IEnumerable<string> dataSamples = null;
                 if (createIndexRequest.IndexName == "securitybooks")
                 {
                     var securityBooks = JsonConvert.DeserializeObject<List<SecurityBook>>(jsonContent);
@@ -217,7 +235,6 @@ namespace NetworkMonitor.Search.Services
                         return result;
                     }
                     items = securityBooks.Cast<object>().ToList();
-                    dataSamples = securityBooks.SelectMany(sb => new[] { sb.Input, sb.Output, sb.Summary }).Where(s => !string.IsNullOrWhiteSpace(s));
                 }
                 else
                 {
@@ -228,17 +245,9 @@ namespace NetworkMonitor.Search.Services
                         return result;
                     }
                     items = documents.Cast<object>().ToList();
-                    dataSamples = documents.SelectMany(d => new[] { d.Input, d.Output }).Where(s => !string.IsNullOrWhiteSpace(s));
                 }
 
-                Console.WriteLine("JSON deserialization succeeded. Proceeding with indexing.");
-
-                // If we have new dataSamples, calculate max token length
-                int? maxTokenLength = null;
-                if (dataSamples != null)
-                {
-                    maxTokenLength = CalculateMaxTokenizedLength(_modelParams.BertModelDir, dataSamples);
-                }
+                Console.WriteLine($"JSON deserialization succeeded. Proceeding with indexing using {maxTokenLength} tokens of the input.");
 
                 var resultEn = await _openSearchHelper.EnsureIndexExistsAsync(indexName: createIndexRequest.IndexName, recreateIndex: createIndexRequest.RecreateIndex);
                 if (!resultEn.Success) return resultEn;
@@ -261,7 +270,7 @@ namespace NetworkMonitor.Search.Services
         }
         /// <summary>
         /// Reads a data directory, treats each subdirectory as an index name, and for each JSON file in each subdirectory,
-        /// runs CreateIndexAsync for that file and index, using parameters from the provided CreateIndexRequest.
+        /// calculates the max token length for all files in the index, stores it, and then runs CreateIndexAsync for each file.
         /// </summary>
         /// <param name="createIndexRequest">A CreateIndexRequest object with parameters to use (AppID, AuthKey, RecreateIndex, etc). Set JsonFile and IndexName to empty.</param>
         /// <returns>A ResultObj summarizing the operation.</returns>
@@ -270,7 +279,6 @@ namespace NetworkMonitor.Search.Services
             var result = new ResultObj();
             result.Success = true;
             result.Message = $"Starting CreateIndicesFromDataDirAsync for {createIndexRequest.JsonFile}\n";
-            // TODO we need to search the directory in the same folder as the exexutable contxt called data for dirs . this 
             string dataDir = _dataDir;
             if (string.IsNullOrWhiteSpace(dataDir) || !Directory.Exists(dataDir))
             {
@@ -296,6 +304,80 @@ namespace NetworkMonitor.Search.Services
                     continue;
                 }
 
+                // Instead of loading all data into memory, just keep track of the max token count as we go
+                var tempTokenizer = new AutoTokenizer(_modelParams.BertModelDir);
+                int maxTokenLength = MinTokenLengthCap;
+                bool bailedEarly = false;
+                foreach (var jsonFile in jsonFiles)
+                {
+                    if (bailedEarly) break;
+                    var jsonContent = File.ReadAllText(jsonFile);
+                    if (indexName == "securitybooks")
+                    {
+                        var securityBooks = JsonConvert.DeserializeObject<List<SecurityBook>>(jsonContent);
+                        if (securityBooks != null)
+                        {
+                            foreach (var sb in securityBooks)
+                            {
+                                foreach (var text in new[] { sb.Input, sb.Output, sb.Summary })
+                                {
+                                    if (!string.IsNullOrWhiteSpace(text))
+                                    {
+                                        int tokenCount = tempTokenizer.CountTokens(text);
+                                        if (tokenCount > maxTokenLength)
+                                            maxTokenLength = tokenCount;
+                                        if (maxTokenLength >= MaxTokenLengthCap)
+                                        {
+                                            bailedEarly = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (bailedEarly) break;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        var documents = JsonConvert.DeserializeObject<List<Document>>(jsonContent);
+                        if (documents != null)
+                        {
+                            foreach (var d in documents)
+                            {
+                                foreach (var text in new[] { d.Input, d.Output })
+                                {
+                                    if (!string.IsNullOrWhiteSpace(text))
+                                    {
+                                        int tokenCount = tempTokenizer.CountTokens(text);
+                                        if (tokenCount > maxTokenLength)
+                                            maxTokenLength = tokenCount;
+                                        if (maxTokenLength >= MaxTokenLengthCap)
+                                        {
+                                            bailedEarly = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (bailedEarly) break;
+                            }
+                        }
+                    }
+                }
+
+                // Cap at the value defined in EmbeddingGenerator
+                maxTokenLength = Math.Min(maxTokenLength, MaxTokenLengthCap);
+
+                // Store max token length for this index (if not already set)
+                var loadedMax = LoadIndexMaxTokens(indexName);
+                if (!loadedMax.HasValue)
+                {
+                    SaveIndexMaxTokens(indexName, maxTokenLength);
+                }
+                else
+                {
+                    maxTokenLength = loadedMax.Value;
+                }
+
                 foreach (var jsonFile in jsonFiles)
                 {
                     // Clone the request and set the index and file for this run
@@ -310,7 +392,8 @@ namespace NetworkMonitor.Search.Services
                         MessageID = createIndexRequest.MessageID
                     };
 
-                    var createResult = await CreateIndexAsync(req);
+                    // Pass the maxTokenLength for this index
+                    var createResult = await CreateIndexAsync(req, maxTokenLength);
                     result.Message += $"Index '{indexName}', File '{Path.GetFileName(jsonFile)}': {createResult.Message}\n";
                     if (!createResult.Success)
                         result.Success = false;
@@ -377,7 +460,10 @@ namespace NetworkMonitor.Search.Services
                 {
                     if (result.Success)
                     {
-                        var searchResponse = await _openSearchHelper.SearchDocumentsAsync(queryIndexRequest.QueryText, queryIndexRequest.IndexName);
+                        // Load the max tokens for this index
+                        int? maxTokens = LoadIndexMaxTokens(queryIndexRequest.IndexName);
+                        int useMaxTokens = maxTokens ?? MinTokenLengthCap;
+                        var searchResponse = await _openSearchHelper.SearchDocumentsAsync(queryIndexRequest.QueryText, queryIndexRequest.IndexName, useMaxTokens);
 
                         if (searchResponse != null)
                         {

@@ -156,15 +156,18 @@ namespace NetworkMonitor.Search.Services
 
             try
             {
-                // Branch between single index and directory mode
                 ResultObj createIndexResult;
+                // Only allow bulk/directory mode, single-file indexing is not supported here anymore
                 if (createIndexRequest.CreateFromJsonDataDir)
                 {
                     createIndexResult = await _openSearchService.CreateIndicesFromDataDirAsync(createIndexRequest);
                 }
                 else
                 {
-                    createIndexResult = await _openSearchService.CreateIndexAsync(createIndexRequest);
+                    result.Success = false;
+                    result.Message += "Error: Single-file CreateIndex is not supported via RabbitListener. Use CreateFromJsonDataDir=true.";
+                    _logger.LogWarning(result.Message);
+                    return result;
                 }
                 result.Success = createIndexResult.Success;
                 result.Message += createIndexResult.Message;
