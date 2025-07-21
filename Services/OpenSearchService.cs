@@ -66,16 +66,9 @@ namespace NetworkMonitor.Search.Services
 
             // Log all parameters read in the constructor
             _logger.LogInformation(
-                $"OpenSearchService initialized with: " +
-                $"EmbeddingModelDir={_modelParams.EmbeddingModelDir}\n" +
-                $"EmbeddingModelVecDim={_modelParams.EmbeddingModelVecDim}\n" +
-                $"OpenSearchUser={_modelParams.User}\n" +
-                $"OpenSearchUrl={_modelParams.Url}\n" +
-                $"MaxTokenLengthCap={_maxTokenLengthCap}\n" +
-                $"MinTokenLengthCap={_minTokenLengthCap}\n" +
-                $"OpenSearchDefaultIndex={_modelParams.DefaultIndex}\n" +
-                $"DataDir={_dataDir}\n" +
-                $"LlmThreads={_llmThreads}\n"
+                $"OpenSearchService initialized with: EmbeddingModelDir={_modelParams.EmbeddingModelDir}\nEmbeddingModelVecDim={_modelParams.EmbeddingModelVecDim}\nOpenSearchUser={_modelParams.User}\n" +
+                $"OpenSearchUrl={_modelParams.Url}\nMaxTokenLengthCap={_maxTokenLengthCap}\nMinTokenLengthCap={_minTokenLengthCap}\n" +
+                $"OpenSearchDefaultIndex={_modelParams.DefaultIndex}\nDataDir={_dataDir}\nLlmThreads={_llmThreads}\n"
             );
         }
 
