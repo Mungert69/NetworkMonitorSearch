@@ -36,8 +36,8 @@ namespace NetworkMonitor.Search.Services
         private readonly IRabbitRepo _rabbitRepo;
         private readonly string _dataDir;
         private readonly MemoryCache _cache = new MemoryCache(new MemoryCacheOptions());
-        private int _maxTokenLengthCap = 8192;
-        private int _minTokenLengthCap = 128;
+        private int _maxTokenLengthCap;
+        private int _minTokenLengthCap;
         private int _llmThreads;
 
         public OpenSearchService(ILogger<OpenSearchService> logger, ISystemParamsHelper systemParamsHelper, IRabbitRepo rabbitRepo)
