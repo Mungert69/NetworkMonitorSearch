@@ -334,7 +334,7 @@ public class OpenSearchHelper
                                 ""summary"": { ""type"": ""text"" },
                                 ""input_embedding"": { 
                                     ""type"": ""knn_vector"", 
-                                    ""dimension"": " + _modelParams.BertModelVecDim + @",
+                                    ""dimension"": " + _modelParams.EmbeddingModelVecDim + @",
                                     ""method"": {
                                         ""name"": ""hnsw"",
                                         ""space_type"": ""l2"",
@@ -343,7 +343,7 @@ public class OpenSearchHelper
                                 },
                                 ""output_embedding"": { 
                                     ""type"": ""knn_vector"", 
-                                    ""dimension"": " + _modelParams.BertModelVecDim + @",
+                                    ""dimension"": " + _modelParams.EmbeddingModelVecDim + @",
                                     ""method"": {
                                         ""name"": ""hnsw"",
                                         ""space_type"": ""l2"",
@@ -352,7 +352,7 @@ public class OpenSearchHelper
                                 },
                                 ""summary_embedding"": { 
                                     ""type"": ""knn_vector"", 
-                                    ""dimension"": " + _modelParams.BertModelVecDim + @",
+                                    ""dimension"": " + _modelParams.EmbeddingModelVecDim + @",
                                     ""method"": {
                                         ""name"": ""hnsw"",
                                         ""space_type"": ""l2"",
@@ -378,7 +378,7 @@ public class OpenSearchHelper
                                 ""output"": { ""type"": ""text"" },
                                 ""embedding"": { 
                                     ""type"": ""knn_vector"", 
-                                    ""dimension"": " + _modelParams.BertModelVecDim + @",
+                                    ""dimension"": " + _modelParams.EmbeddingModelVecDim + @",
                                     ""method"": {
                                         ""name"": ""hnsw"",
                                         ""space_type"": ""l2"",

@@ -49,8 +49,8 @@ namespace NetworkMonitor.Search.Services
         {
             _logger = logger;
             _encryptKey = systemParamsHelper.GetSystemParams().LLMEncryptKey;
-            _modelParams.BertModelDir = systemParamsHelper.GetMLParams().BertModelDir;
-            _modelParams.BertModelVecDim = systemParamsHelper.GetMLParams().BertModelVecDim;
+            _modelParams.EmbeddingModelDir = systemParamsHelper.GetMLParams().EmbeddingModelDir;
+            _modelParams.EmbeddingModelVecDim = systemParamsHelper.GetMLParams().EmbeddingModelVecDim;
             _modelParams.Key = systemParamsHelper.GetMLParams().OpenSearchKey;
             _modelParams.User = systemParamsHelper.GetMLParams().OpenSearchUser;
             _modelParams.Url = systemParamsHelper.GetMLParams().OpenSearchUrl;
@@ -67,8 +67,8 @@ namespace NetworkMonitor.Search.Services
             // Log all parameters read in the constructor
             _logger.LogInformation(
                 $"OpenSearchService initialized with: " +
-                $"BertModelDir={_modelParams.BertModelDir}\n" +
-                $"BertModelVecDim={_modelParams.BertModelVecDim}\n" +
+                $"EmbeddingModelDir={_modelParams.EmbeddingModelDir}\n" +
+                $"EmbeddingModelVecDim={_modelParams.EmbeddingModelVecDim}\n" +
                 $"OpenSearchUser={_modelParams.User}\n" +
                 $"OpenSearchUrl={_modelParams.Url}\n" +
                 $"MaxTokenLengthCap={_maxTokenLengthCap}\n" +
@@ -361,7 +361,7 @@ namespace NetworkMonitor.Search.Services
                 }
 
                 // Instead of loading all data into memory, just keep track of the pad to token count as we go
-                var tempTokenizer = new AutoTokenizer(_modelParams.BertModelDir,_maxTokenLengthCap);
+                var tempTokenizer = new AutoTokenizer(_modelParams.EmbeddingModelDir,_maxTokenLengthCap);
                 int padToTokens = _minTokenLengthCap;
                 bool bailedEarly = false;
                 foreach (var jsonFile in jsonFiles)

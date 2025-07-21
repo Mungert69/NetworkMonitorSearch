@@ -69,7 +69,7 @@ namespace NetworkMonitor.Search
                 else
                 {
                     return new EmbeddingGenerator(
-                        mlParams.BertModelDir,
+                        mlParams.EmbeddingModelDir,
                         mlParams.MaxTokenLengthCap,
                         mlParams.LlmThreads
                     );
