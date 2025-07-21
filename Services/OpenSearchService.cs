@@ -169,7 +169,7 @@ namespace NetworkMonitor.Search.Services
 
 
 
-        private void SaveIndexMaxTokens(string indexName, int padToTokens)
+        private void SaveIndexMaxTokens(string indexName, int padToTokens, int actualMaxTokens = -1)
         {
             // Save in memory
             _indexMaxTokens[indexName] = padToTokens;
@@ -177,14 +177,14 @@ namespace NetworkMonitor.Search.Services
             var configDir = Path.Combine(_dataDir, "index_config");
             Directory.CreateDirectory(configDir);
             var file = Path.Combine(configDir, $"{indexName}_padtokens.json");
-            File.WriteAllText(file, JsonConvert.SerializeObject(new { padToTokens }));
+            File.WriteAllText(file, JsonConvert.SerializeObject(new { padToTokens, actualMaxTokens }));
         }
 
-        private int? LoadIndexMaxTokens(string indexName)
+        private (int? padToTokens, int? actualMaxTokens) LoadIndexMaxTokens(string indexName)
         {
             // Try in-memory first
             if (_indexMaxTokens.TryGetValue(indexName, out var val))
-                return val;
+                return (val, null);
             // Try disk
             var configDir = Path.Combine(_dataDir, "index_config");
             var file = Path.Combine(configDir, $"{indexName}_padtokens.json");
@@ -192,10 +192,16 @@ namespace NetworkMonitor.Search.Services
             {
                 var obj = JsonConvert.DeserializeObject<dynamic>(File.ReadAllText(file));
                 int loaded = (int)obj.padToTokens;
+                int? actual = null;
+                try
+                {
+                    actual = obj.actualMaxTokens != null ? (int)obj.actualMaxTokens : (int?)null;
+                }
+                catch { }
                 _indexMaxTokens[indexName] = loaded;
-                return loaded;
+                return (loaded, actual);
             }
-            return null;
+            return (null, null);
         }
 
         public async Task<ResultObj> CreateIndexAsync(CreateIndexRequest createIndexRequest, int padToTokens)
@@ -299,7 +305,7 @@ namespace NetworkMonitor.Search.Services
             }
 
             // Try to load pad tokens for this index, fail if not found
-            int? padToTokens = LoadIndexMaxTokens(createIndexRequest.IndexName);
+            var (padToTokens, _) = LoadIndexMaxTokens(createIndexRequest.IndexName);
             if (!padToTokens.HasValue)
             {
                 return new ResultObj
@@ -356,6 +362,7 @@ namespace NetworkMonitor.Search.Services
                 // Instead of loading all data into memory, just keep track of the pad to token count as we go
                 var tempTokenizer = new AutoTokenizer(_modelParams.EmbeddingModelDir,_maxTokenLengthCap);
                 int padToTokens = _minTokenLengthCap;
+                int actualMaxTokens = _minTokenLengthCap;
                 bool bailedEarly = false;
                 foreach (var jsonFile in jsonFiles)
                 {
@@ -373,6 +380,8 @@ namespace NetworkMonitor.Search.Services
                                     if (!string.IsNullOrWhiteSpace(text))
                                     {
                                         int tokenCount = tempTokenizer.CountTokens(text);
+                                        if (tokenCount > actualMaxTokens)
+                                            actualMaxTokens = tokenCount;
                                         if (tokenCount > padToTokens)
                                             padToTokens = tokenCount;
                                         if (padToTokens >= _maxTokenLengthCap)
@@ -398,6 +407,8 @@ namespace NetworkMonitor.Search.Services
                                     if (!string.IsNullOrWhiteSpace(text))
                                     {
                                         int tokenCount = tempTokenizer.CountTokens(text);
+                                        if (tokenCount > actualMaxTokens)
+                                            actualMaxTokens = tokenCount;
                                         if (tokenCount > padToTokens)
                                             padToTokens = tokenCount;
                                         if (padToTokens >= _maxTokenLengthCap)
@@ -416,15 +427,17 @@ namespace NetworkMonitor.Search.Services
                 // Cap at the value defined in EmbeddingGenerator
                 padToTokens = Math.Min(padToTokens, _maxTokenLengthCap);
 
-                // Store pad to token length for this index (if not already set)
-                var loadedMax = LoadIndexMaxTokens(indexName);
+                // Store pad to token length and actual max tokens for this index (if not already set)
+                var (loadedMax, loadedActual) = LoadIndexMaxTokens(indexName);
                 if (!loadedMax.HasValue)
                 {
-                    SaveIndexMaxTokens(indexName, padToTokens);
+                    SaveIndexMaxTokens(indexName, padToTokens, actualMaxTokens);
                 }
                 else
                 {
                     padToTokens = loadedMax.Value;
+                    if (loadedActual.HasValue)
+                        actualMaxTokens = loadedActual.Value;
                 }
 
                 // If there are any .json files, set RecreateIndex to true
@@ -446,7 +459,7 @@ namespace NetworkMonitor.Search.Services
 
                     // Pass the padToTokens for this index
                     var createResult = await CreateIndexAsync(req, padToTokens);
-                    result.Message += $"Index '{indexName}', File '{Path.GetFileName(jsonFile)}': MaxTokens {padToTokens} : {createResult.Message}\n";
+                    result.Message += $"Index '{indexName}', File '{Path.GetFileName(jsonFile)}': MaxTokensUsed {padToTokens}, ActualMaxTokens {actualMaxTokens} : {createResult.Message}\n";
                     if (!createResult.Success)
                         result.Success = false;
                 }
@@ -513,7 +526,7 @@ namespace NetworkMonitor.Search.Services
                     if (result.Success)
                     {
                         // Load the pad to tokens for this index
-                        int? padToTokens = LoadIndexMaxTokens(queryIndexRequest.IndexName);
+                        var (padToTokens, _) = LoadIndexMaxTokens(queryIndexRequest.IndexName);
                         int useMaxTokens = padToTokens ?? _minTokenLengthCap;
                         var searchResponse = await _openSearchHelper.SearchDocumentsAsync(queryIndexRequest.QueryText, queryIndexRequest.IndexName, useMaxTokens);
 

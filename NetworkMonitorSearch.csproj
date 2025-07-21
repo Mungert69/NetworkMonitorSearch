@@ -6,7 +6,7 @@
     <PublishProfile>DefaultContainer</PublishProfile>
     <ContainerBaseImage>mcr.microsoft.com/dotnet/aspnet:9.0</ContainerBaseImage>
   
-    <ContainerImageTag>0.3.1</ContainerImageTag>
+    <ContainerImageTag>0.3.2</ContainerImageTag>
       <StartupObject>NetworkMonitor.Search.Program</StartupObject>
           <Nullable>enable</Nullable>
                 <NoWarn>CS8618</NoWarn> 

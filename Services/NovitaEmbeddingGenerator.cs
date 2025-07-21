@@ -88,6 +88,7 @@ namespace NetworkMonitor.Search.Services
             }
 
             var responseBody = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"Sent {text} got reponse Novita API raw response: {responseBody}");
             var result = JsonConvert.DeserializeObject<OpenAIEmbeddingResponse>(responseBody);
 
             if (result?.data == null || result.data.Count == 0)
