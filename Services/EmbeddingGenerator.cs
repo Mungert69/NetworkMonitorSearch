@@ -16,7 +16,7 @@ namespace NetworkMonitor.Search.Services
         private readonly string _modelPath;
         private readonly int _maxTokenLengthCap;
 
-        private static readonly object _embeddingLock = new object();
+        private static readonly SemaphoreSlim _embeddingSemaphore = new SemaphoreSlim(1, 1);
 
         public EmbeddingGenerator(string modelDir, int maxTokenLengthCap, int llmThreads)
         {
@@ -29,11 +29,14 @@ namespace NetworkMonitor.Search.Services
 
             // Initialize the tokenizer with default min length
             _tokenizer = new AutoTokenizer(modelDir, _maxTokenLengthCap);
+            foreach (var o in _session.OutputMetadata)
+                Console.WriteLine($"{o.Key}: {string.Join(", ", o.Value.Dimensions)}");
         }
 
-        public List<float> GenerateEmbedding(string text, int padToTokens, bool pad = false)
+        public async Task<List<float>> GenerateEmbeddingAsync(string text, int padToTokens, bool pad = false)
         {
-            lock (_embeddingLock)
+            await _embeddingSemaphore.WaitAsync();
+            try
             {
                 var tokenizedInput = pad
                     ? _tokenizer.Tokenize(text, padToTokens)
@@ -99,6 +102,10 @@ namespace NetworkMonitor.Search.Services
                 }
 
                 throw new Exception("No float32 ,float16 or int8 tensor found in ONNX outputs!");
+            }
+            finally
+            {
+                _embeddingSemaphore.Release();
             }
         }
 

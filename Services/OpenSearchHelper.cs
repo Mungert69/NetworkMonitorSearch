@@ -51,14 +51,14 @@ public class OpenSearchHelper
 
    }
 
-    // Method to generate embeddings for a document
-    private List<float> GenerateEmbedding(string text, int padToTokens)
+    // Method to generate embeddings for a document (async)
+    private async Task<List<float>> GenerateEmbeddingAsync(string text, int padToTokens)
     {
-        return _embeddingGenerator.GenerateEmbedding(text, padToTokens);
+        return await _embeddingGenerator.GenerateEmbeddingAsync(text, padToTokens);
     }
 
     // Method to load documents or securitybooks from JSON and index in OpenSearch
-    public async Task<ResultObj> IndexDocumentsAsync(IEnumerable<object> items,  string indexName,int padToTokens  )
+    public async Task<ResultObj> IndexDocumentsAsync(IEnumerable<object> items, string indexName, int padToTokens)
     {
         var result = new ResultObj() { Message = " EnsureIndexExistsAsync : " };
         bool oneFail = false;
@@ -79,15 +79,15 @@ public class OpenSearchHelper
                     // Generate embeddings for all fields if needed
                     if (securityBook.InputEmbedding == null || securityBook.InputEmbedding.Count == 0)
                     {
-                        securityBook.InputEmbedding = GenerateEmbedding(securityBook.Input, padToTokens);
+                        securityBook.InputEmbedding = await GenerateEmbeddingAsync(securityBook.Input, padToTokens);
                     }
                     if (securityBook.OutputEmbedding == null || securityBook.OutputEmbedding.Count == 0)
                     {
-                        securityBook.OutputEmbedding = GenerateEmbedding(securityBook.Output, padToTokens);
+                        securityBook.OutputEmbedding = await GenerateEmbeddingAsync(securityBook.Output, padToTokens);
                     }
                     if (securityBook.SummaryEmbedding == null || securityBook.SummaryEmbedding.Count == 0)
                     {
-                        securityBook.SummaryEmbedding = GenerateEmbedding(securityBook.Summary, padToTokens);
+                        securityBook.SummaryEmbedding = await GenerateEmbeddingAsync(securityBook.Summary, padToTokens);
                     }
                     documentId = ComputeSha256Hash(securityBook.Output);
                     // Check if the document already exists
@@ -112,7 +112,7 @@ public class OpenSearchHelper
                     // Generate embedding if needed
                     if (document.Embedding == null || document.Embedding.Count == 0)
                     {
-                        document.Embedding = GenerateEmbedding(document.Output, padToTokens);
+                        document.Embedding = await GenerateEmbeddingAsync(document.Output, padToTokens);
                     }
                     documentId = ComputeSha256Hash(document.Output);
                     // Check if the document already exists
@@ -167,9 +167,9 @@ public class OpenSearchHelper
     }
 
     // Method to search for similar documents using precomputed embeddings
-    public async Task<SearchResponseObj> SearchDocumentsAsync(string queryText, string indexName , int padToTokens )
+    public async Task<SearchResponseObj> SearchDocumentsAsync(string queryText, string indexName, int padToTokens)
     {
-        var queryEmbedding = GenerateEmbedding(queryText, padToTokens);
+        var queryEmbedding = await GenerateEmbeddingAsync(queryText, padToTokens);
         var searchResponse = new SearchResponseObj();
 
         if (queryEmbedding.Count == 0)
@@ -233,14 +233,14 @@ public class OpenSearchHelper
     }
 
     public async Task<SearchResponseObj> MultiFieldKnnSearchAsync(
-    string queryText,
-    int kPerField ,
-    Dictionary<string, float>? fieldWeights,
-    string indexName ,
-    int padToTokens )
+        string queryText,
+        int kPerField,
+        Dictionary<string, float>? fieldWeights,
+        string indexName,
+        int padToTokens)
     {
 
-        var queryEmbedding = GenerateEmbedding(queryText, padToTokens);
+        var queryEmbedding = await GenerateEmbeddingAsync(queryText, padToTokens);
 
         if (queryEmbedding.Count == 0)
             throw new Exception("Failed to generate query embedding.");

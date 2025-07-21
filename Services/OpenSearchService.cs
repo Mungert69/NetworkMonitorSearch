@@ -59,6 +59,20 @@ namespace NetworkMonitor.Search.Services
             var embeddingGenerator = new EmbeddingGenerator(_modelParams.BertModelDir, _maxTokenLengthCap, _llmThreads);
 
             _openSearchHelper = new OpenSearchHelper(_modelParams, embeddingGenerator);
+
+            // Log all parameters read in the constructor
+            _logger.LogInformation(
+                $"OpenSearchService initialized with: " +
+                $"BertModelDir={_modelParams.BertModelDir}\n" +
+                $"BertModelVecDim={_modelParams.BertModelVecDim}\n" +
+                $"OpenSearchUser={_modelParams.User}\n" +
+                $"OpenSearchUrl={_modelParams.Url}\n" +
+                $"MaxTokenLengthCap={_maxTokenLengthCap}\n" +
+                $"MinTokenLengthCap={_minTokenLengthCap}\n" +
+                $"OpenSearchDefaultIndex={_modelParams.DefaultIndex}\n" +
+                $"DataDir={_dataDir}\n" +
+                $"LlmThreads={_llmThreads}\n"
+            );
         }
 
         // Create a snapshot for the given indices
@@ -416,6 +430,9 @@ namespace NetworkMonitor.Search.Services
                     padToTokens = loadedMax.Value;
                 }
 
+                // If there are any .json files, set RecreateIndex to true
+                bool shouldRecreateIndex = jsonFiles.Length > 0;
+
                 foreach (var jsonFile in jsonFiles)
                 {
                     // Clone the request and set the index and file for this run
@@ -425,7 +442,7 @@ namespace NetworkMonitor.Search.Services
                         JsonFile = jsonFile,
                         AppID = createIndexRequest.AppID,
                         AuthKey = createIndexRequest.AuthKey,
-                        RecreateIndex = createIndexRequest.RecreateIndex,
+                        RecreateIndex = shouldRecreateIndex,
                         JsonMapping = "", // always use file for this
                         MessageID = createIndexRequest.MessageID
                     };
