@@ -37,9 +37,10 @@ public class OpenSearchHelper
     private OSModelParams _modelParams;
 
 
-    public OpenSearchHelper(OSModelParams modelParams)
+    public OpenSearchHelper(OSModelParams modelParams,EmbeddingGenerator embeddingGenerator)
     {
         _modelParams = modelParams;
+        _embeddingGenerator = embeddingGenerator;
         // Initialize OpenSearch client
         var settings = new ConnectionSettings(_modelParams.SearchUri)
             .DefaultIndex(_modelParams.DefaultIndex)
@@ -48,19 +49,16 @@ public class OpenSearchHelper
 
         _client = new OpenSearchClient(settings);
 
-        // Always use default (no maxTokenLength) for search/query, only pass for create index
-        _embeddingGenerator = new EmbeddingGenerator(_modelParams.BertModelDir);
-    }
+   }
 
     // Method to generate embeddings for a document
-    private List<float> GenerateEmbedding(string text, int maxTokenLength)
+    private List<float> GenerateEmbedding(string text, int padToTokens)
     {
-        // Always use the same instance, must pass a value for maxTokenLength
-        return _embeddingGenerator.GenerateEmbedding(text, maxTokenLength);
+        return _embeddingGenerator.GenerateEmbedding(text, padToTokens);
     }
 
     // Method to load documents or securitybooks from JSON and index in OpenSearch
-    public async Task<ResultObj> IndexDocumentsAsync(IEnumerable<object> items,  string indexName,int maxTokenLength  )
+    public async Task<ResultObj> IndexDocumentsAsync(IEnumerable<object> items,  string indexName,int padToTokens  )
     {
         var result = new ResultObj() { Message = " EnsureIndexExistsAsync : " };
         bool oneFail = false;
@@ -81,15 +79,15 @@ public class OpenSearchHelper
                     // Generate embeddings for all fields if needed
                     if (securityBook.InputEmbedding == null || securityBook.InputEmbedding.Count == 0)
                     {
-                        securityBook.InputEmbedding = GenerateEmbedding(securityBook.Input, maxTokenLength);
+                        securityBook.InputEmbedding = GenerateEmbedding(securityBook.Input, padToTokens);
                     }
                     if (securityBook.OutputEmbedding == null || securityBook.OutputEmbedding.Count == 0)
                     {
-                        securityBook.OutputEmbedding = GenerateEmbedding(securityBook.Output, maxTokenLength);
+                        securityBook.OutputEmbedding = GenerateEmbedding(securityBook.Output, padToTokens);
                     }
                     if (securityBook.SummaryEmbedding == null || securityBook.SummaryEmbedding.Count == 0)
                     {
-                        securityBook.SummaryEmbedding = GenerateEmbedding(securityBook.Summary, maxTokenLength);
+                        securityBook.SummaryEmbedding = GenerateEmbedding(securityBook.Summary, padToTokens);
                     }
                     documentId = ComputeSha256Hash(securityBook.Output);
                     // Check if the document already exists
@@ -114,7 +112,7 @@ public class OpenSearchHelper
                     // Generate embedding if needed
                     if (document.Embedding == null || document.Embedding.Count == 0)
                     {
-                        document.Embedding = GenerateEmbedding(document.Output, maxTokenLength);
+                        document.Embedding = GenerateEmbedding(document.Output, padToTokens);
                     }
                     documentId = ComputeSha256Hash(document.Output);
                     // Check if the document already exists
@@ -169,10 +167,9 @@ public class OpenSearchHelper
     }
 
     // Method to search for similar documents using precomputed embeddings
-    public async Task<SearchResponseObj> SearchDocumentsAsync(string queryText, string indexName , int maxTokenLength )
+    public async Task<SearchResponseObj> SearchDocumentsAsync(string queryText, string indexName , int padToTokens )
     {
-        // Generate embedding for the query text using the same maxTokenLength as indexing
-        var queryEmbedding = GenerateEmbedding(queryText, maxTokenLength);
+        var queryEmbedding = GenerateEmbedding(queryText, padToTokens);
         var searchResponse = new SearchResponseObj();
 
         if (queryEmbedding.Count == 0)
@@ -240,10 +237,10 @@ public class OpenSearchHelper
     int kPerField = 10,
     Dictionary<string, float>? fieldWeights = null,
     string indexName = "securitybooks",
-    int maxTokenLength = 512)
+    int padToTokens )
     {
-        // Generate embedding for the query text using the same maxTokenLength as indexing
-        var queryEmbedding = GenerateEmbedding(queryText, maxTokenLength);
+
+        var queryEmbedding = GenerateEmbedding(queryText, padToTokens);
 
         if (queryEmbedding.Count == 0)
             throw new Exception("Failed to generate query embedding.");

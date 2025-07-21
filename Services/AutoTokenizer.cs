@@ -11,11 +11,13 @@ namespace NetworkMonitor.Search.Services
     {
         private readonly Tokenizer _tokenizer;
         private readonly uint _padTokenId;
+        private readonly string _maxTokenLengthCap;
 
-        public AutoTokenizer(string modelDir)
+        public AutoTokenizer(string modelDir,int maxTokenLengthCap)
         {
             // Load tokenizer.json
             var tokJson = Path.Combine(modelDir, "tokenizer.json");
+            _maxTokenLengthCap = maxTokenLengthCap;
             _tokenizer = new Tokenizer(tokJson);
 
             // Load config for max length and pad token
@@ -55,7 +57,10 @@ namespace NetworkMonitor.Search.Services
         public TokenizedInput TokenizeNoPad(string text)
         {
             var ids = _tokenizer.Encode(text);
-            var inputIds = ids.Select(i => (long)i).ToList();
+            int maxLen = int.TryParse(_maxTokenLengthCap, out var cap) ? cap : int.MaxValue;
+            int len = Math.Min(ids.Length, maxLen);
+
+            var inputIds = ids.Take(len).Select(i => (long)i).ToList();
             var attentionMask = Enumerable.Repeat(1L, inputIds.Count).ToList();
             return new TokenizedInput
             {

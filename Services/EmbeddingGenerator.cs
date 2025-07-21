@@ -14,27 +14,29 @@ namespace NetworkMonitor.Search.Services
         private readonly InferenceSession _session;
         private readonly AutoTokenizer _tokenizer;
         private readonly string _modelPath;
+        private readonly string _maxTokenLengthCap;
 
         private static readonly object _embeddingLock = new object();
 
-        public EmbeddingGenerator(string modelDir)
+        public EmbeddingGenerator(string modelDir, int maxTokenLengthCap)
         {
             // Load the ONNX model with restricted CPU threads
             _modelPath = Path.Combine(modelDir, "model.onnx");
             var options = new SessionOptions();
+            _maxTokenLengthCap = maxTokenLengthCap;
             options.IntraOpNumThreads = 2;
             _session = new InferenceSession(_modelPath, options);
 
             // Initialize the tokenizer with default min length
-            _tokenizer = new AutoTokenizer(modelDir);
+            _tokenizer = new AutoTokenizer(modelDir, _maxTokenLengthCap);
         }
 
-        public List<float> GenerateEmbedding(string text, int maxTokens, bool pad = false)
+        public List<float> GenerateEmbedding(string text, int padToTokens, bool pad = false)
         {
             lock (_embeddingLock)
             {
                 var tokenizedInput = pad
-                    ? _tokenizer.Tokenize(text, maxTokens)
+                    ? _tokenizer.Tokenize(text, padToTokens)
                     : _tokenizer.TokenizeNoPad(text);
 
                 foreach (var kv in _session.InputMetadata)
