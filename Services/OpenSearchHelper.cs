@@ -234,9 +234,9 @@ public class OpenSearchHelper
 
     public async Task<SearchResponseObj> MultiFieldKnnSearchAsync(
     string queryText,
-    int kPerField = 10,
-    Dictionary<string, float>? fieldWeights = null,
-    string indexName = "securitybooks",
+    int kPerField ,
+    Dictionary<string, float>? fieldWeights,
+    string indexName ,
     int padToTokens )
     {
 

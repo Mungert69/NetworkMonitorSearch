@@ -11,7 +11,7 @@ namespace NetworkMonitor.Search.Services
     {
         private readonly Tokenizer _tokenizer;
         private readonly uint _padTokenId;
-        private readonly string _maxTokenLengthCap;
+        private readonly int _maxTokenLengthCap;
 
         public AutoTokenizer(string modelDir,int maxTokenLengthCap)
         {
@@ -57,8 +57,7 @@ namespace NetworkMonitor.Search.Services
         public TokenizedInput TokenizeNoPad(string text)
         {
             var ids = _tokenizer.Encode(text);
-            int maxLen = int.TryParse(_maxTokenLengthCap, out var cap) ? cap : int.MaxValue;
-            int len = Math.Min(ids.Length, maxLen);
+            int len = Math.Min(ids.Length, _maxTokenLengthCap);
 
             var inputIds = ids.Take(len).Select(i => (long)i).ToList();
             var attentionMask = Enumerable.Repeat(1L, inputIds.Count).ToList();

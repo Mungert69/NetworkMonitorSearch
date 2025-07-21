@@ -14,7 +14,7 @@ namespace NetworkMonitor.Search.Services
         private readonly InferenceSession _session;
         private readonly AutoTokenizer _tokenizer;
         private readonly string _modelPath;
-        private readonly string _maxTokenLengthCap;
+        private readonly int _maxTokenLengthCap;
 
         private static readonly object _embeddingLock = new object();
 

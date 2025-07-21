@@ -38,6 +38,7 @@ namespace NetworkMonitor.Search.Services
         private readonly MemoryCache _cache = new MemoryCache(new MemoryCacheOptions());
         private int _maxTokenLengthCap = 8192;
         private int _minTokenLengthCap = 128;
+        private int _llmThreads;
 
         public OpenSearchService(ILogger<OpenSearchService> logger, ISystemParamsHelper systemParamsHelper, IRabbitRepo rabbitRepo)
         {
@@ -53,10 +54,10 @@ namespace NetworkMonitor.Search.Services
             _modelParams.DefaultIndex = systemParamsHelper.GetMLParams().OpenSearchDefaultIndex;
             _rabbitRepo = rabbitRepo;
             _dataDir = systemParamsHelper.GetSystemParams().DataDir;
-            
-            var llmThreads = systemParamsHelper.GetMLParams().LlmThreads;
-            var embeddingGenerator = new EmbeddingGenerator(_modelParams.BertModelDir, _maxTokenLengthCap,llmThreads);
-  
+
+            _llmThreads = systemParamsHelper.GetMLParams().LlmThreads;
+            var embeddingGenerator = new EmbeddingGenerator(_modelParams.BertModelDir, _maxTokenLengthCap, _llmThreads);
+
             _openSearchHelper = new OpenSearchHelper(_modelParams, embeddingGenerator);
         }
 
@@ -342,8 +343,8 @@ namespace NetworkMonitor.Search.Services
                 }
 
                 // Instead of loading all data into memory, just keep track of the pad to token count as we go
-                var tempTokenizer = new AutoTokenizer(_modelParams.BertModelDir);
-                int padToTokens = MinTokenLengthCap;
+                var tempTokenizer = new AutoTokenizer(_modelParams.BertModelDir,_maxTokenLengthCap);
+                int padToTokens = _minTokenLengthCap;
                 bool bailedEarly = false;
                 foreach (var jsonFile in jsonFiles)
                 {
@@ -499,7 +500,7 @@ namespace NetworkMonitor.Search.Services
                     {
                         // Load the pad to tokens for this index
                         int? padToTokens = LoadIndexMaxTokens(queryIndexRequest.IndexName);
-                        int useMaxTokens = padToTokens ?? MinTokenLengthCap;
+                        int useMaxTokens = padToTokens ?? _minTokenLengthCap;
                         var searchResponse = await _openSearchHelper.SearchDocumentsAsync(queryIndexRequest.QueryText, queryIndexRequest.IndexName, useMaxTokens);
 
                         if (searchResponse != null)
