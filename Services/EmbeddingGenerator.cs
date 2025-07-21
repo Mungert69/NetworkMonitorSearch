@@ -18,13 +18,13 @@ namespace NetworkMonitor.Search.Services
 
         private static readonly object _embeddingLock = new object();
 
-        public EmbeddingGenerator(string modelDir, int maxTokenLengthCap)
+        public EmbeddingGenerator(string modelDir, int maxTokenLengthCap, int llmThreads)
         {
             // Load the ONNX model with restricted CPU threads
             _modelPath = Path.Combine(modelDir, "model.onnx");
             var options = new SessionOptions();
             _maxTokenLengthCap = maxTokenLengthCap;
-            options.IntraOpNumThreads = 2;
+            options.IntraOpNumThreads = llmThreads;
             _session = new InferenceSession(_modelPath, options);
 
             // Initialize the tokenizer with default min length

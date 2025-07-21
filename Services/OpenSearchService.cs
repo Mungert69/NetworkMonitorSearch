@@ -53,10 +53,11 @@ namespace NetworkMonitor.Search.Services
             _modelParams.DefaultIndex = systemParamsHelper.GetMLParams().OpenSearchDefaultIndex;
             _rabbitRepo = rabbitRepo;
             _dataDir = systemParamsHelper.GetSystemParams().DataDir;
-            // Always use default (no padToTokens) for search/query, only pass for create index
-            var embeddingGenerator = new EmbeddingGenerator(_modelParams.BertModelDir);
+            
+            var llmThreads = systemParamsHelper.GetMLParams().LlmThreads;
+            var embeddingGenerator = new EmbeddingGenerator(_modelParams.BertModelDir, _maxTokenLengthCap,llmThreads);
   
-            _openSearchHelper = new OpenSearchHelper(_modelParams, embeddingGenerator, _maxTokenLengthCap);
+            _openSearchHelper = new OpenSearchHelper(_modelParams, embeddingGenerator);
         }
 
         // Create a snapshot for the given indices
