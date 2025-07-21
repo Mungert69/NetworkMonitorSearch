@@ -60,8 +60,11 @@ namespace NetworkMonitor.Search
                 {
                     if (string.IsNullOrWhiteSpace(mlParams.LlmHFKey))
                         throw new Exception("LlmHFKey must be set in config for Novita embedding provider.");
+                    // Pass modelDir (tokenizer config path), not model name
                     return new NovitaEmbeddingGenerator(
                         mlParams.LlmHFKey,
+                        mlParams.EmbeddingModelDir, // Pass the directory for tokenizer config
+                        mlParams.MaxTokenLengthCap,
                         mlParams.EmbeddingApiModel,
                         mlParams.EmbeddingApiUrl
                     );

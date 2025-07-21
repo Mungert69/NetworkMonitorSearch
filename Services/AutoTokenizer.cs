@@ -104,6 +104,15 @@ namespace NetworkMonitor.Search.Services
             return ids.Length;
         }
 
+        /// <summary>
+        /// Decodes a list of token IDs back to text.
+        /// </summary>
+        public string Decode(List<long> tokenIds)
+        {
+            // Convert List<long> to uint[]
+            var uintIds = tokenIds.Select(id => (uint)id).ToArray();
+            return _tokenizer.Decode(uintIds);
+        }
 
     }
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -19,16 +20,36 @@ namespace NetworkMonitor.Search.Services
         private static readonly SemaphoreSlim _callSemaphore = new SemaphoreSlim(1, 1);
         private static DateTime _lastCallTime = DateTime.MinValue;
         private static readonly TimeSpan _minDelay = TimeSpan.FromSeconds(10);
+        private readonly int _maxTokenLengthCap;
+        private readonly AutoTokenizer _tokenizer;
 
-        public NovitaEmbeddingGenerator(string apiKey, string model = "baai/bge-m3", string apiUrl = "https://api.novita.ai/v3/openai/embeddings")
+        public NovitaEmbeddingGenerator(
+            string apiKey,
+            string modelDir, // path to tokenizer config for the correct model
+            int maxTokenLengthCap,
+            string model = "baai/bge-m3",
+            string apiUrl = "https://api.novita.ai/v3/openai/embeddings"
+        )
         {
             _apiKey = apiKey;
             _model = model;
             _apiUrl = apiUrl;
+            _maxTokenLengthCap = maxTokenLengthCap;
+            _tokenizer = new AutoTokenizer(modelDir, maxTokenLengthCap);
         }
 
         public async Task<List<float>> GenerateEmbeddingAsync(string text, int padToTokens, bool pad = false)
         {
+            // Enforce maxTokenLengthCap using the correct tokenizer
+            var tokenized = _tokenizer.TokenizeNoPad(text);
+            if (tokenized.InputIds.Count > _maxTokenLengthCap)
+            {
+                // Truncate to maxTokenLengthCap tokens
+                var truncatedIds = tokenized.InputIds.Take(_maxTokenLengthCap).ToList();
+                // Reconstruct text from tokens
+                text = _tokenizer.Decode(truncatedIds);
+            }
+
             await _callSemaphore.WaitAsync();
             try
             {
