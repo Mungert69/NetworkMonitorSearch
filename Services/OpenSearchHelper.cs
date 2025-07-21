@@ -33,11 +33,10 @@ public class SecurityBook
 public class OpenSearchHelper
 {
     private readonly OpenSearchClient _client;
-    private EmbeddingGenerator _embeddingGenerator;
+    private IEmbeddingGenerator _embeddingGenerator;
     private OSModelParams _modelParams;
 
-
-    public OpenSearchHelper(OSModelParams modelParams,EmbeddingGenerator embeddingGenerator)
+    public OpenSearchHelper(OSModelParams modelParams, IEmbeddingGenerator embeddingGenerator)
     {
         _modelParams = modelParams;
         _embeddingGenerator = embeddingGenerator;
@@ -48,8 +47,7 @@ public class OpenSearchHelper
             .ServerCertificateValidationCallback((o, certificate, chain, errors) => true);
 
         _client = new OpenSearchClient(settings);
-
-   }
+    }
 
     // Method to generate embeddings for a document (async)
     private async Task<List<float>> GenerateEmbeddingAsync(string text, int padToTokens)

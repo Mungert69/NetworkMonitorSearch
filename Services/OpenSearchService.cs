@@ -40,7 +40,12 @@ namespace NetworkMonitor.Search.Services
         private int _minTokenLengthCap;
         private int _llmThreads;
 
-        public OpenSearchService(ILogger<OpenSearchService> logger, ISystemParamsHelper systemParamsHelper, IRabbitRepo rabbitRepo)
+        public OpenSearchService(
+            ILogger<OpenSearchService> logger,
+            ISystemParamsHelper systemParamsHelper,
+            IRabbitRepo rabbitRepo,
+            IEmbeddingGenerator embeddingGenerator
+        )
         {
             _logger = logger;
             _encryptKey = systemParamsHelper.GetSystemParams().LLMEncryptKey;
@@ -56,7 +61,6 @@ namespace NetworkMonitor.Search.Services
             _dataDir = systemParamsHelper.GetSystemParams().DataDir;
 
             _llmThreads = systemParamsHelper.GetMLParams().LlmThreads;
-            var embeddingGenerator = new EmbeddingGenerator(_modelParams.BertModelDir, _maxTokenLengthCap, _llmThreads);
 
             _openSearchHelper = new OpenSearchHelper(_modelParams, embeddingGenerator);
 

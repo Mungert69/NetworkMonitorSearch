@@ -52,7 +52,31 @@ namespace NetworkMonitor.Search
             services.AddSingleton<IRabbitListener, RabbitListener>();
             services.AddSingleton<ISystemParamsHelper, SystemParamsHelper>();
             services.AddSingleton<IOpenSearchService, OpenSearchService>();
+            services.AddSingleton<IEmbeddingGenerator>(sp =>
+            {
+                var systemParamsHelper = sp.GetRequiredService<ISystemParamsHelper>();
+                var mlParams = systemParamsHelper.GetMLParams();
+                if (mlParams.EmbeddingProvider.ToLower() == "api")
+                {
+                    if (string.IsNullOrWhiteSpace(mlParams.LlmHFKey))
+                        throw new Exception("LlmHFKey must be set in config for Novita embedding provider.");
+                    return new NovitaEmbeddingGenerator(
+                        mlParams.LlmHFKey,
+                        mlParams.EmbeddingApiModel,
+                        mlParams.EmbeddingApiUrl
+                    );
+                }
+                else
+                {
+                    return new EmbeddingGenerator(
+                        mlParams.BertModelDir,
+                        mlParams.MaxTokenLengthCap,
+                        mlParams.LlmThreads
+                    );
+                }
+            });
 
+          
 
             services.AddSingleton<IFileRepo, FileRepo>();
             services.AddAsyncServiceInitialization()

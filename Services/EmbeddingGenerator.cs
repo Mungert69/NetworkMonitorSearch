@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using Newtonsoft.Json.Linq;
@@ -9,7 +11,12 @@ using Onnx;
 
 namespace NetworkMonitor.Search.Services
 {
-    public class EmbeddingGenerator
+    public interface IEmbeddingGenerator
+    {
+        Task<List<float>> GenerateEmbeddingAsync(string text, int padToTokens, bool pad = false);
+    }
+
+    public class EmbeddingGenerator : IEmbeddingGenerator
     {
         private readonly InferenceSession _session;
         private readonly AutoTokenizer _tokenizer;
@@ -218,9 +225,10 @@ namespace NetworkMonitor.Search.Services
             }
         }
 
-        public List<List<float>> GenerateBatchEmbeddings(List<string> texts, int maxTokens)
+        public async Task<List<List<float>>> GenerateBatchEmbeddingsAsync(List<string> texts, int maxTokens)
         {
-            lock (_embeddingLock)
+            await _embeddingSemaphore.WaitAsync();
+            try
             {
                 var tokenized = texts.Select(t => _tokenizer.Tokenize(t, maxTokens)).ToList();
                 int B = texts.Count, S = maxTokens;
@@ -264,6 +272,10 @@ namespace NetworkMonitor.Search.Services
                     return PoolBatchEmbeddingsF16(embeddingsTensorF16, tokenized.Select(x => x.AttentionMask).ToList());
                 }
                 throw new Exception("No float32 or float16 tensor found in ONNX outputs!");
+            }
+            finally
+            {
+                _embeddingSemaphore.Release();
             }
         }
 
@@ -351,15 +363,6 @@ namespace NetworkMonitor.Search.Services
                 normB += b[i] * b[i];
             }
             return dot / (float)(Math.Sqrt(normA) * Math.Sqrt(normB));
-        }
-
-        public void CompareEmbeddings(EmbeddingGenerator floatGen, EmbeddingGenerator quantGen, string text, int maxTokens)
-        {
-            var floatEmb = floatGen.GenerateEmbedding(text, maxTokens);
-            var quantEmb = quantGen.GenerateEmbedding(text, maxTokens);
-            PrintEmbedding("FLOAT32", floatEmb);
-            PrintEmbedding("UINT8 ", quantEmb);
-            Console.WriteLine($"Cosine similarity: {CosineSim(floatEmb, quantEmb)}");
         }
 
 
