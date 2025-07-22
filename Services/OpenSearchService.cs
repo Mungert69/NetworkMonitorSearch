@@ -66,7 +66,7 @@ namespace NetworkMonitor.Search.Services
             _llmThreads = systemParamsHelper.GetMLParams().LlmThreads;
             var strategies = new IIndexingStrategy[]
             {
-                 new DocumentIndexingStrategy(),
+                new DocumentIndexingStrategy(),
                 new SecurityBookIndexingStrategy()
             };
             _deserializers = new List<IIndexDeserializerStrategy>
@@ -78,12 +78,10 @@ namespace NetworkMonitor.Search.Services
             _tokenEstimators = new List<ITokenEstimationStrategy>
             {
                 new DocumentTokenEstimationStrategy(),
-                 new SecurityBookTokenEstimationStrategy()
+                new SecurityBookTokenEstimationStrategy()
             };
 
             _openSearchHelper = new OpenSearchHelper(_modelParams, embeddingGenerator, strategies);
-
-
 
             // Log all parameters read in the constructor
             _logger.LogInformation(
@@ -496,7 +494,9 @@ namespace NetworkMonitor.Search.Services
                         // Load the pad to tokens for this index
                         var (padToTokens, _) = LoadIndexMaxTokens(queryIndexRequest.IndexName);
                         int useMaxTokens = padToTokens ?? _minTokenLengthCap;
-                        var searchResponse = await _openSearchHelper.SearchDocumentsAsync(queryIndexRequest.QueryText, queryIndexRequest.IndexName, useMaxTokens);
+                       
+                        
+                        var searchResponse = await _openSearchHelper.SearchDocumentsAsync(queryIndexRequest.QueryText, queryIndexRequest.IndexName, useMaxTokens, queryIndexRequest.VectorSearchMode);
 
                         if (searchResponse != null)
                         {

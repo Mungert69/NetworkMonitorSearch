@@ -101,10 +101,17 @@ public class OpenSearchHelper
         result.Success = !failed;
         return result;
     }
+    // in OpenSearchHelper
+    private IIndexingStrategy StrategyForIndex(string index) =>
+        _strategies.FirstOrDefault(s =>
+            s.IndexName.Equals(index, StringComparison.OrdinalIgnoreCase))
+        ?? throw new InvalidOperationException($"No strategy for index '{index}'");
 
     // Method to search for similar documents using precomputed embeddings
-    public async Task<SearchResponseObj> SearchDocumentsAsync(string queryText, string indexName, int padToTokens)
+    // Accepts an optional vectorFieldName parameter to support different field names per index/object.
+    public async Task<SearchResponseObj> SearchDocumentsAsync(string queryText, string indexName, int padToTokens, VectorSearchMode mode = VectorSearchMode.content)
     {
+
         var queryEmbedding = await GenerateEmbeddingAsync(queryText, padToTokens);
         var searchResponse = new SearchResponseObj();
 
@@ -125,15 +132,18 @@ public class OpenSearchHelper
         };
         httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes($"{_modelParams.User}:{_modelParams.Key}")));
 
-        // Construct the k-NN search request body
+        var strategy = StrategyForIndex(indexName);
+        string vectorFieldName = strategy.GetVectorField(mode);
+
+        // Construct the k-NN search request body with dynamic field name
         var requestBody = new
         {
             size = 3,
             query = new
             {
-                knn = new
+                knn = new Dictionary<string, object>
                 {
-                    embedding = new
+                    [vectorFieldName] = new
                     {
                         vector = queryEmbedding,
                         k = 3
@@ -181,13 +191,16 @@ public class OpenSearchHelper
         if (queryEmbedding.Count == 0)
             throw new Exception("Failed to generate query embedding.");
 
-        // Default equal weights if none provided
-        fieldWeights ??= new Dictionary<string, float>
-        {
-            ["input_embedding"] = 1f,
-            ["output_embedding"] = 1f,
-            ["summary_embedding"] = 1f
-        };
+        var strategy = StrategyForIndex(indexName);
+
+        // caller‑supplied weights override defaults
+        fieldWeights = fieldWeights?.Count > 0
+            ? strategy.GetDefaultFieldWeights()
+                      .Concat(fieldWeights)
+                      .GroupBy(kv => kv.Key)
+                      .ToDictionary(g => g.Key, g => g.Last().Value)
+            : new Dictionary<string, float>(strategy.GetDefaultFieldWeights());
+
 
         var shouldClauses = new List<object>();
         foreach (var (field, weight) in fieldWeights)
@@ -237,117 +250,48 @@ public class OpenSearchHelper
                new SearchResponseObj();
     }
 
-    public async Task<ResultObj> EnsureIndexExistsAsync(string indexName = "", bool recreateIndex = false)
+    public async Task<ResultObj> EnsureIndexExistsAsync(
+     string indexName = "", bool recreateIndex = false)
     {
-        var result = new ResultObj() { Message = " EnsureIndexExistsAsync : " };
+        var result = new ResultObj { Message = "EnsureIndexExistsAsync: " };
         try
         {
+            if (string.IsNullOrWhiteSpace(indexName))
+                indexName = _modelParams.DefaultIndex;
 
-            if (indexName == "") indexName = _modelParams.DefaultIndex;
+            // 1. Delete if requested
             if (recreateIndex)
             {
-                var resultDel = await DeleteIndexAsync(indexName);
-                result.Message += resultDel.Message;
-                if (!resultDel.Success) return resultDel;
+                var del = await DeleteIndexAsync(indexName);
+                result.Message += del.Message;
+                if (!del.Success) return del;
             }
 
-            var existsResponse = await _client.Indices.ExistsAsync(indexName);
-            if (!existsResponse.Exists)
+            // 2. Only create if missing
+            var exists = await _client.Indices.ExistsAsync(indexName);
+            if (exists.Exists)
             {
-                // Use low-level client to create the index with the knn_vector mapping and knn enabled
-                string mapping;
-                if (indexName == "securitybooks")
-                {
-                    mapping = @"
-                    {
-                        ""settings"": {
-                            ""index"": {
-                                ""knn"": true
-                            }
-                        },
-                        ""mappings"": {
-                            ""properties"": {
-                                ""input"": { ""type"": ""text"" },
-                                ""output"": { ""type"": ""text"" },
-                                ""summary"": { ""type"": ""text"" },
-                                ""input_embedding"": { 
-                                    ""type"": ""knn_vector"", 
-                                    ""dimension"": " + _modelParams.EmbeddingModelVecDim + @",
-                                    ""method"": {
-                                        ""name"": ""hnsw"",
-                                        ""space_type"": ""l2"",
-                                        ""engine"": ""faiss""
-                                    }
-                                },
-                                ""output_embedding"": { 
-                                    ""type"": ""knn_vector"", 
-                                    ""dimension"": " + _modelParams.EmbeddingModelVecDim + @",
-                                    ""method"": {
-                                        ""name"": ""hnsw"",
-                                        ""space_type"": ""l2"",
-                                        ""engine"": ""faiss""
-                                    }
-                                },
-                                ""summary_embedding"": { 
-                                    ""type"": ""knn_vector"", 
-                                    ""dimension"": " + _modelParams.EmbeddingModelVecDim + @",
-                                    ""method"": {
-                                        ""name"": ""hnsw"",
-                                        ""space_type"": ""l2"",
-                                        ""engine"": ""faiss""
-                                    }
-                                }
-                            }
-                        }
-                    }";
-                }
-                else
-                {
-                    mapping = @"
-                    {
-                        ""settings"": {
-                            ""index"": {
-                                ""knn"": true
-                            }
-                        },
-                        ""mappings"": {
-                            ""properties"": {
-                                ""input"": { ""type"": ""text"" },
-                                ""output"": { ""type"": ""text"" },
-                                ""embedding"": { 
-                                    ""type"": ""knn_vector"", 
-                                    ""dimension"": " + _modelParams.EmbeddingModelVecDim + @",
-                                    ""method"": {
-                                        ""name"": ""hnsw"",
-                                        ""space_type"": ""l2"",
-                                        ""engine"": ""faiss""
-                                    }
-                                }
-                            }
-                        }
-                    }";
-                }
-
-                var createIndexResponse = await _client.LowLevel.Indices.CreateAsync<StringResponse>(indexName, PostData.String(mapping));
-
-                if (!createIndexResponse.Success)
-                {
-                    result.Message = $"Failed to create index: {createIndexResponse.DebugInformation}";
-                }
-                else result.Message += " Success : create index ";
-                result.Success = createIndexResponse.Success;
-            }
-            else
-            {
-                result.Message += " Success : index already exists ";
                 result.Success = true;
+                result.Message += "index already exists";
+                return result;
             }
 
+            // 3. Ask strategy for mapping
+            var strategy = StrategyForIndex(indexName);
+            var mapping = strategy.GetIndexMapping(_modelParams.EmbeddingModelVecDim);
+
+            var create = await _client.LowLevel.Indices.CreateAsync<StringResponse>(
+                             indexName, PostData.String(mapping));
+
+            result.Success = create.Success;
+            result.Message += create.Success
+                ? "index created"
+                : $"Failed: {create.DebugInformation}";
         }
-        catch (Exception e)
+        catch (Exception ex)
         {
             result.Success = false;
-            result.Message += e.Message;
+            result.Message += ex.Message;
         }
         return result;
     }

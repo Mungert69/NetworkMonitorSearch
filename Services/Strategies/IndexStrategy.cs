@@ -14,10 +14,17 @@ namespace NetworkMonitor.Search.Services;
 /// All methods are **type‑agnostic** for OpenSearchHelper,
 /// but individual strategy classes know their concrete type.
 /// </summary>
+
+
 public interface IIndexingStrategy
 {
     /// Logical name of the OpenSearch index this artefact lives in
     string IndexName { get; }
+
+    string GetVectorField(VectorSearchMode mode);
+    IReadOnlyDictionary<string, float> GetDefaultFieldWeights();
+    string GetIndexMapping(int vectorDimension);
+
 
     /// Ensure that the artefact has every embedding it needs; generate
     /// anything that is missing.
@@ -54,7 +61,11 @@ internal static class IdHelper
 public sealed class DocumentIndexingStrategy : IIndexingStrategy
 {
     public string IndexName => "documents";
-
+    public string ContentVectorFieldName => "embedding";
+    public string GetVectorField(VectorSearchMode mode) =>
+            ContentVectorFieldName;
+    public IReadOnlyDictionary<string, float> GetDefaultFieldWeights() =>
+            new Dictionary<string, float> { [ContentVectorFieldName] = 1f };
     public bool CanHandle(object item) => item is Document;
 
     public async Task EnsureEmbeddingsAsync(object item,
@@ -82,6 +93,23 @@ public sealed class DocumentIndexingStrategy : IIndexingStrategy
             embedding = d.Embedding
         };
     }
+    // documents
+    public string GetIndexMapping(int dim) => $@"
+{{
+  ""settings"": {{ ""index"": {{ ""knn"": true }} }},
+  ""mappings"": {{
+    ""properties"": {{
+      ""input""     : {{ ""type"": ""text"" }},
+      ""output""    : {{ ""type"": ""text"" }},
+      ""embedding"" : {{
+        ""type""  : ""knn_vector"",
+        ""dimension"" : {dim},
+        ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }}
+      }}
+    }}
+  }}
+}}";
+
 }
 
 //  ------------------------------------------------------------------------------
@@ -90,6 +118,23 @@ public sealed class SecurityBookIndexingStrategy : IIndexingStrategy
 {
     public string IndexName => "securitybooks";
 
+    public string ContentVectorFieldName => "output_embedding";
+    public string QuestionVectorFieldName => "input_embedding";
+    public string SummaryVectorFieldName => "summary_embedding";
+    public string GetVectorField(VectorSearchMode mode) => mode switch
+    {
+        VectorSearchMode.question => QuestionVectorFieldName,
+        VectorSearchMode.summary => SummaryVectorFieldName,
+        _ => ContentVectorFieldName
+    };
+
+    public IReadOnlyDictionary<string, float> GetDefaultFieldWeights() =>
+       new Dictionary<string, float>
+       {
+           [QuestionVectorFieldName] = 1f,
+           [ContentVectorFieldName] = 1f,
+           [SummaryVectorFieldName] = 1f
+       };
     public bool CanHandle(object item) => item is SecurityBook;
 
     public async Task EnsureEmbeddingsAsync(object item,
@@ -129,6 +174,28 @@ public sealed class SecurityBookIndexingStrategy : IIndexingStrategy
             summary_embedding = sb.SummaryEmbedding
         };
     }
+    // securitybooks
+public string GetIndexMapping(int dim) => $@"
+{{
+  ""settings"": {{ ""index"": {{ ""knn"": true }} }},
+  ""mappings"": {{
+    ""properties"": {{
+      ""input""  : {{ ""type"": ""text"" }},
+      ""output"" : {{ ""type"": ""text"" }},
+      ""summary"": {{ ""type"": ""text"" }},
+
+      ""input_embedding"" :  {{ ""type"": ""knn_vector"", ""dimension"": {dim},
+                               ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }},
+
+      ""output_embedding"" : {{ ""type"": ""knn_vector"", ""dimension"": {dim},
+                               ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }},
+
+      ""summary_embedding"" : {{ ""type"": ""knn_vector"", ""dimension"": {dim},
+                                ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }}
+    }}
+  }}
+}}";
+
 
 }
 
