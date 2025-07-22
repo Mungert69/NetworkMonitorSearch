@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 using NetworkMonitor.Objects;
+using Newtonsoft.Json;
 
 namespace NetworkMonitor.Search.Services;
 
@@ -24,6 +25,7 @@ public interface IIndexingStrategy
     string GetVectorField(VectorSearchMode mode);
     IReadOnlyDictionary<string, float> GetDefaultFieldWeights();
     string GetIndexMapping(int vectorDimension);
+    List<object> Deserialize(string json);
 
 
     /// Ensure that the artefact has every embedding it needs; generate
@@ -40,6 +42,7 @@ public interface IIndexingStrategy
 
     /// Returns true if this strategy can handle <paramref name="item"/>.
     bool CanHandle(object item);
+    bool CanHandle(string indexName);
 }
 
 //  ------------------------------------------------------------------------------
@@ -67,6 +70,8 @@ public sealed class DocumentIndexingStrategy : IIndexingStrategy
     public IReadOnlyDictionary<string, float> GetDefaultFieldWeights() =>
             new Dictionary<string, float> { [ContentVectorFieldName] = 1f };
     public bool CanHandle(object item) => item is Document;
+    public bool CanHandle(string indexName) => indexName.Equals("documents", StringComparison.OrdinalIgnoreCase);
+
 
     public async Task EnsureEmbeddingsAsync(object item,
                                             IEmbeddingGenerator generator,
@@ -109,7 +114,11 @@ public sealed class DocumentIndexingStrategy : IIndexingStrategy
     }}
   }}
 }}";
-
+    public List<object> Deserialize(string json)
+    {
+        var list = JsonConvert.DeserializeObject<List<Document>>(json);
+        return list?.Cast<object>().ToList() ?? new List<object>();
+    }
 }
 
 //  ------------------------------------------------------------------------------
@@ -136,6 +145,8 @@ public sealed class SecurityBookIndexingStrategy : IIndexingStrategy
            [SummaryVectorFieldName] = 1f
        };
     public bool CanHandle(object item) => item is SecurityBook;
+    public bool CanHandle(string indexName) => indexName.Equals("securitybooks", StringComparison.OrdinalIgnoreCase);
+
 
     public async Task EnsureEmbeddingsAsync(object item,
                                             IEmbeddingGenerator generator,
@@ -175,7 +186,7 @@ public sealed class SecurityBookIndexingStrategy : IIndexingStrategy
         };
     }
     // securitybooks
-public string GetIndexMapping(int dim) => $@"
+    public string GetIndexMapping(int dim) => $@"
 {{
   ""settings"": {{ ""index"": {{ ""knn"": true }} }},
   ""mappings"": {{
@@ -195,7 +206,11 @@ public string GetIndexMapping(int dim) => $@"
     }}
   }}
 }}";
-
+    public List<object> Deserialize(string json)
+    {
+        var list = JsonConvert.DeserializeObject<List<SecurityBook>>(json);
+        return list?.Cast<object>().ToList() ?? new List<object>();
+    }
 
 }
 

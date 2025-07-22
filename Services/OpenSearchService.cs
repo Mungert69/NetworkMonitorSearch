@@ -39,9 +39,8 @@ namespace NetworkMonitor.Search.Services
         private int _maxTokenLengthCap;
         private int _minTokenLengthCap;
         private int _llmThreads;
-        private readonly List<IIndexDeserializerStrategy> _deserializers;
         private readonly List<ITokenEstimationStrategy> _tokenEstimators;
-
+        private readonly IIndexingStrategy[] _strategies;
 
         public OpenSearchService(
             ILogger<OpenSearchService> logger,
@@ -64,16 +63,12 @@ namespace NetworkMonitor.Search.Services
             _dataDir = systemParamsHelper.GetSystemParams().DataDir;
 
             _llmThreads = systemParamsHelper.GetMLParams().LlmThreads;
-            var strategies = new IIndexingStrategy[]
+            _strategies = new IIndexingStrategy[]
             {
                 new DocumentIndexingStrategy(),
                 new SecurityBookIndexingStrategy()
             };
-            _deserializers = new List<IIndexDeserializerStrategy>
-            {
-                new DocumentDeserializerStrategy(),
-                new SecurityBookDeserializerStrategy()
-            };
+
 
             _tokenEstimators = new List<ITokenEstimationStrategy>
             {
@@ -81,7 +76,7 @@ namespace NetworkMonitor.Search.Services
                 new SecurityBookTokenEstimationStrategy()
             };
 
-            _openSearchHelper = new OpenSearchHelper(_modelParams, embeddingGenerator, strategies);
+            _openSearchHelper = new OpenSearchHelper(_modelParams, embeddingGenerator, _strategies);
 
             // Log all parameters read in the constructor
             _logger.LogInformation(
@@ -286,7 +281,7 @@ namespace NetworkMonitor.Search.Services
                     return result;
                 }
 
-                var deserializer = _deserializers.FirstOrDefault(d => d.CanHandle(createIndexRequest.IndexName));
+                var deserializer = _strategies.FirstOrDefault(d => d.CanHandle(createIndexRequest.IndexName));
                 if (deserializer == null)
                 {
                     result.Message += $"No deserialization strategy for index '{createIndexRequest.IndexName}'.";
@@ -375,7 +370,7 @@ namespace NetworkMonitor.Search.Services
                 {
                     if (bailedEarly) break;
                     var jsonContent = File.ReadAllText(jsonFile);
-                    var sampleItems = _deserializers.First(d => d.CanHandle(indexName)).Deserialize(jsonContent);
+                    var sampleItems = _strategies.First(d => d.CanHandle(indexName)).Deserialize(jsonContent);
                     foreach (var item in sampleItems)
                     {
                         var fields = estimator.GetFields(item);
@@ -494,8 +489,8 @@ namespace NetworkMonitor.Search.Services
                         // Load the pad to tokens for this index
                         var (padToTokens, _) = LoadIndexMaxTokens(queryIndexRequest.IndexName);
                         int useMaxTokens = padToTokens ?? _minTokenLengthCap;
-                       
-                        
+
+
                         var searchResponse = await _openSearchHelper.SearchDocumentsAsync(queryIndexRequest.QueryText, queryIndexRequest.IndexName, useMaxTokens, queryIndexRequest.VectorSearchMode);
 
                         if (searchResponse != null)

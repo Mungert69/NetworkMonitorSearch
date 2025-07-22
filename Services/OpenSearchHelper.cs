@@ -103,8 +103,7 @@ public class OpenSearchHelper
     }
     // in OpenSearchHelper
     private IIndexingStrategy StrategyForIndex(string index) =>
-        _strategies.FirstOrDefault(s =>
-            s.IndexName.Equals(index, StringComparison.OrdinalIgnoreCase))
+         _strategies.FirstOrDefault(s => s.CanHandle(index))
         ?? throw new InvalidOperationException($"No strategy for index '{index}'");
 
     // Method to search for similar documents using precomputed embeddings
