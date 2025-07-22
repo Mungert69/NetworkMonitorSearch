@@ -57,6 +57,7 @@ public class NovitaEmbeddingGenerator : IEmbeddingGenerator
                 if (result.error.Contains("maximum context length", StringComparison.OrdinalIgnoreCase))
                 {
                     maxCap = Math.Max(500, maxCap - 500);
+                    _logger.LogDebug("Truncated input to {TokenCount} tokens", maxCap);
                     continue;
                 }
                 _rateLimiter.NotifyFailure(result.rateLimited);
