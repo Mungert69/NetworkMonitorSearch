@@ -44,25 +44,24 @@ namespace NetworkMonitor.Search.Services
 
         public OpenSearchService(
             ILogger<OpenSearchService> logger,
-            ISystemParamsHelper systemParamsHelper,
+            MLParams mlParams,
+            SystemParams systemParams,
             IRabbitRepo rabbitRepo,
             IEmbeddingGenerator embeddingGenerator
         )
         {
             _logger = logger;
-            _encryptKey = systemParamsHelper.GetSystemParams().LLMEncryptKey;
-            _modelParams.EmbeddingModelDir = systemParamsHelper.GetMLParams().EmbeddingModelDir;
-            _modelParams.EmbeddingModelVecDim = systemParamsHelper.GetMLParams().EmbeddingModelVecDim;
-            _modelParams.Key = systemParamsHelper.GetMLParams().OpenSearchKey;
-            _modelParams.User = systemParamsHelper.GetMLParams().OpenSearchUser;
-            _modelParams.Url = systemParamsHelper.GetMLParams().OpenSearchUrl;
-            _maxTokenLengthCap = systemParamsHelper.GetMLParams().MaxTokenLengthCap;
-            _minTokenLengthCap = systemParamsHelper.GetMLParams().MinTokenLengthCap;
-            _modelParams.DefaultIndex = systemParamsHelper.GetMLParams().OpenSearchDefaultIndex;
             _rabbitRepo = rabbitRepo;
-            _dataDir = systemParamsHelper.GetSystemParams().DataDir;
 
-            _llmThreads = systemParamsHelper.GetMLParams().LlmThreads;
+            _modelParams = mlParams;
+            _llmThreads = mlParams.LlmThreads;
+            _maxTokenLengthCap = mlParams.MaxTokenLengthCap;
+            _minTokenLengthCap = mlParams.MinTokenLengthCap;
+            
+            _dataDir = systemParams.DataDir;
+            _encryptKey = systemParams.LLMEncryptKey;
+
+
             _strategies = new IIndexingStrategy[]
             {
                 new DocumentIndexingStrategy(),
