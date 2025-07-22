@@ -7,7 +7,9 @@ using System.Threading.Tasks;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using Newtonsoft.Json.Linq;
+using Microsoft.Extensions.Logging;
 using Onnx;
+using NetworkMonitor.Objects;
 
 namespace NetworkMonitor.Search.Services
 {
@@ -22,22 +24,22 @@ namespace NetworkMonitor.Search.Services
         private readonly AutoTokenizer _tokenizer;
         private readonly string _modelPath;
         private readonly int _maxTokenLengthCap;
+        private readonly ILogger<EmbeddingGenerator> _logger;
 
         private static readonly SemaphoreSlim _embeddingSemaphore = new SemaphoreSlim(1, 1);
 
-        public EmbeddingGenerator(string modelDir, int maxTokenLengthCap, int llmThreads)
+        public EmbeddingGenerator(MLParams mlParams, ILogger<EmbeddingGenerator> logger )
         {
-            // Load the ONNX model with restricted CPU threads
-            _modelPath = Path.Combine(modelDir, "model.onnx");
+            _logger = logger;
+            _modelPath = Path.Combine(mlParams.EmbeddingModelDir, "model.onnx");
             var options = new SessionOptions();
-            _maxTokenLengthCap = maxTokenLengthCap;
-            options.IntraOpNumThreads = llmThreads;
+            _maxTokenLengthCap = mlParams.MaxTokenLengthCap;
+            options.IntraOpNumThreads = mlParams.LlmThreads;
             _session = new InferenceSession(_modelPath, options);
 
-            // Initialize the tokenizer with default min length
-            _tokenizer = new AutoTokenizer(modelDir, _maxTokenLengthCap);
+            _tokenizer = new AutoTokenizer(mlParams.EmbeddingModelDir, _maxTokenLengthCap);
             foreach (var o in _session.OutputMetadata)
-                Console.WriteLine($"{o.Key}: {string.Join(", ", o.Value.Dimensions)}");
+                _logger?.LogInformation($"{o.Key}: {string.Join(", ", o.Value.Dimensions)}");
         }
 
         public async Task<List<float>> GenerateEmbeddingAsync(string text, int padToTokens, bool pad = false)
@@ -50,7 +52,7 @@ namespace NetworkMonitor.Search.Services
                     : _tokenizer.TokenizeNoPad(text);
 
                 foreach (var kv in _session.InputMetadata)
-                    Console.WriteLine($"{kv.Key} → {kv.Value.ElementType}, shape: [{string.Join(", ", kv.Value.Dimensions)}]");
+                    _logger.LogInformation($"{kv.Key} → {kv.Value.ElementType}, shape: [{string.Join(", ", kv.Value.Dimensions)}]");
 
                 // Convert to tensors
                 int seqLen = tokenizedInput.InputIds.Count;
@@ -80,7 +82,7 @@ namespace NetworkMonitor.Search.Services
                 // Debug: print all returned outputs
                 foreach (var result in results)
                 {
-                    Console.WriteLine($"ONNX output: {result.Name}, type: {result.Value?.GetType()}");
+                    _logger.LogInformation($"ONNX output: {result.Name}, type: {result.Value?.GetType()}");
                 }
 
                 // Try to find a float32 or float16 tensor (embedding) in the outputs
@@ -108,7 +110,8 @@ namespace NetworkMonitor.Search.Services
 
                 }
 
-                throw new Exception("No float32 ,float16 or int8 tensor found in ONNX outputs!");
+                _logger.LogInformation("No float32 ,float16 or int8 tensor found in ONNX outputs!");
+                return new List<float>();
             }
             finally
             {
@@ -349,8 +352,8 @@ namespace NetworkMonitor.Search.Services
         }
         public void PrintEmbedding(string label, List<float> emb)
         {
-            Console.WriteLine($"{label} first 8: {string.Join(", ", emb.Take(8))}");
-            Console.WriteLine($"{label} norm: {Math.Sqrt(emb.Sum(x => x * x))}");
+            _logger.LogInformation($"{label} first 8: {string.Join(", ", emb.Take(8))}");
+            _logger.LogInformation($"{label} norm: {Math.Sqrt(emb.Sum(x => x * x))}");
         }
 
         public float CosineSim(List<float> a, List<float> b)

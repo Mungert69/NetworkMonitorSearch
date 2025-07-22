@@ -16,6 +16,8 @@ using NetworkMonitor.Objects.Repository;
 using HostInitActions;
 using Microsoft.Extensions.Logging;
 using NetworkMonitor.Utils.Helpers;
+using System.Net.Http;
+using NetworkMonitor.Objects;
 
 
 namespace NetworkMonitor.Search
@@ -52,29 +54,43 @@ namespace NetworkMonitor.Search
             services.AddSingleton<IRabbitListener, RabbitListener>();
             services.AddSingleton<ISystemParamsHelper, SystemParamsHelper>();
             services.AddSingleton<IOpenSearchService, OpenSearchService>();
-            services.AddSingleton<IEmbeddingGenerator>(sp =>
+            // Register MLParams as a singleton, constructed once from ISystemParamsHelper
+            services.AddSingleton<MLParams>(sp =>
             {
                 var systemParamsHelper = sp.GetRequiredService<ISystemParamsHelper>();
-                var mlParams = systemParamsHelper.GetMLParams();
+                return systemParamsHelper.GetMLParams();
+            });
+
+            services.AddSingleton<NovitaApiClient>(sp =>
+            {
+                var mlParams = sp.GetRequiredService<MLParams>();
+                var logger = sp.GetRequiredService<ILogger<NovitaApiClient>>();
+                var httpClient = new HttpClient
+                {
+                    BaseAddress = new Uri(mlParams.EmbeddingApiUrl)
+                };
+                return new NovitaApiClient(httpClient, logger);
+            });
+
+            services.AddSingleton<IEmbeddingGenerator>(sp =>
+            {
+                var mlParams = sp.GetRequiredService<MLParams>();
+                var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
                 if (mlParams.EmbeddingProvider.ToLower() == "api")
                 {
                     if (string.IsNullOrWhiteSpace(mlParams.LlmHFKey))
                         throw new Exception("LlmHFKey must be set in config for Novita embedding provider.");
-                    // Pass modelDir (tokenizer config path), not model name
                     return new NovitaEmbeddingGenerator(
-                        mlParams.LlmHFKey,
-                        mlParams.EmbeddingModelDir, // Pass the directory for tokenizer config
-                        mlParams.MaxTokenLengthCap,
-                        mlParams.EmbeddingApiModel,
-                        mlParams.EmbeddingApiUrl
+                        mlParams,
+                        loggerFactory.CreateLogger<NovitaEmbeddingGenerator>(),
+                        sp.GetRequiredService<NovitaApiClient>()
                     );
                 }
                 else
                 {
                     return new EmbeddingGenerator(
-                        mlParams.EmbeddingModelDir,
-                        mlParams.MaxTokenLengthCap,
-                        mlParams.LlmThreads
+                        mlParams,
+                        loggerFactory.CreateLogger<EmbeddingGenerator>()
                     );
                 }
             });

@@ -1,12 +1,12 @@
 using System;
 using System.IO;
+using Newtonsoft.Json;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using NetworkMonitor.Objects;
 using NetworkMonitor.Objects.Repository;
 using NetworkMonitor.Utils.Helpers;
-using Newtonsoft.Json;
 using Microsoft.Extensions.Caching.Memory;
 using System.Linq;
 
@@ -39,6 +39,9 @@ namespace NetworkMonitor.Search.Services
         private int _maxTokenLengthCap;
         private int _minTokenLengthCap;
         private int _llmThreads;
+        private readonly List<IIndexDeserializerStrategy> _deserializers;
+        private readonly List<ITokenEstimationStrategy> _tokenEstimators;
+
 
         public OpenSearchService(
             ILogger<OpenSearchService> logger,
@@ -61,8 +64,26 @@ namespace NetworkMonitor.Search.Services
             _dataDir = systemParamsHelper.GetSystemParams().DataDir;
 
             _llmThreads = systemParamsHelper.GetMLParams().LlmThreads;
+            var strategies = new IIndexingStrategy[]
+            {
+                 new DocumentIndexingStrategy(),
+                new SecurityBookIndexingStrategy()
+            };
+            _deserializers = new List<IIndexDeserializerStrategy>
+            {
+                new DocumentDeserializerStrategy(),
+                new SecurityBookDeserializerStrategy()
+            };
 
-            _openSearchHelper = new OpenSearchHelper(_modelParams, embeddingGenerator);
+            _tokenEstimators = new List<ITokenEstimationStrategy>
+            {
+                new DocumentTokenEstimationStrategy(),
+                 new SecurityBookTokenEstimationStrategy()
+            };
+
+            _openSearchHelper = new OpenSearchHelper(_modelParams, embeddingGenerator, strategies);
+
+
 
             // Log all parameters read in the constructor
             _logger.LogInformation(
@@ -204,97 +225,6 @@ namespace NetworkMonitor.Search.Services
             return (null, null);
         }
 
-        public async Task<ResultObj> CreateIndexAsync(CreateIndexRequest createIndexRequest, int padToTokens)
-        {
-            var result = new ResultObj();
-            result.Success = false;
-            result.Message = "MessageAPI: CreateIndexAsync: ";
-
-            // Sanity checks
-            if (createIndexRequest == null)
-            {
-                result.Message += "Error: createIndexRequest is null.";
-                return result;
-            }
-
-            if (EncryptHelper.IsBadKey(_encryptKey, createIndexRequest.AuthKey, createIndexRequest.AppID))
-            {
-                result.Success = false;
-                result.Message = $" Error : Failed QueryIndexAsync bad AuthKey for AppID {createIndexRequest.AppID}";
-                _logger.LogError(result.Message);
-                return result;
-            }
-
-            if (string.IsNullOrWhiteSpace(createIndexRequest.IndexName))
-            {
-                result.Message += "Error: indexName is null or empty.";
-                return result;
-            }
-
-            if (string.IsNullOrWhiteSpace(createIndexRequest.JsonMapping) && string.IsNullOrWhiteSpace(createIndexRequest.JsonFile))
-            {
-                result.Message += "Error: JsonMapping  and JsonFile are null or empty.";
-                return result;
-            }
-
-            try
-            {
-                string jsonContent = "";
-                if (!string.IsNullOrEmpty(createIndexRequest.JsonFile))
-                {
-                    jsonContent = await File.ReadAllTextAsync(createIndexRequest.JsonFile);
-
-                }
-                else jsonContent = createIndexRequest.JsonMapping;
-                if (string.IsNullOrEmpty(jsonContent))
-                {
-                    result.Message += "Error: Json is null or empty.";
-                    return result;
-                }
-                // Dynamically deserialize based on index name
-                List<object> items = null;
-                if (createIndexRequest.IndexName == "securitybooks")
-                {
-                    var securityBooks = JsonConvert.DeserializeObject<List<SecurityBook>>(jsonContent);
-                    if (securityBooks == null)
-                    {
-                        result.Message += "Error: Failed to deserialize JSON mapping for securitybooks.";
-                        return result;
-                    }
-                    items = securityBooks.Cast<object>().ToList();
-                }
-                else
-                {
-                    var documents = JsonConvert.DeserializeObject<List<Document>>(jsonContent);
-                    if (documents == null)
-                    {
-                        result.Message += "Error: Failed to deserialize JSON mapping for documents.";
-                        return result;
-                    }
-                    items = documents.Cast<object>().ToList();
-                }
-
-                Console.WriteLine($"JSON deserialization succeeded. Proceeding with indexing using {padToTokens} tokens of the input.");
-
-                var resultEn = await _openSearchHelper.EnsureIndexExistsAsync(indexName: createIndexRequest.IndexName, recreateIndex: createIndexRequest.RecreateIndex);
-                if (!resultEn.Success) return resultEn;
-                var resultIn = await _openSearchHelper.IndexDocumentsAsync(items, createIndexRequest.IndexName, padToTokens);
-                createIndexRequest.Success = resultEn.Success && resultIn.Success;
-                createIndexRequest.Message += resultEn.Message + resultIn.Message;
-
-                await _rabbitRepo.PublishAsync<CreateIndexRequest>("createIndexResult" + createIndexRequest.AppID, createIndexRequest);
-                result.Success = createIndexRequest.Success;
-                result.Message += createIndexRequest.Message;
-
-            }
-            catch (Exception ex)
-            {
-                result.Success = false;
-                result.Message += $"Error: Failed to create index '{createIndexRequest.IndexName}'. Exception: {ex.Message}";
-            }
-
-            return result;
-        }
 
         // Overload: CreateIndexAsync that looks up padToTokens from index name
         public async Task<ResultObj> CreateIndexAsync(CreateIndexRequest createIndexRequest)
@@ -317,12 +247,84 @@ namespace NetworkMonitor.Search.Services
 
             return await CreateIndexAsync(createIndexRequest, padToTokens.Value);
         }
-        /// <summary>
-        /// Reads a data directory, treats each subdirectory as an index name, and for each JSON file in each subdirectory,
-        /// calculates the pad to token length for all files in the index, stores it, and then runs CreateIndexAsync for each file.
-        /// </summary>
-        /// <param name="createIndexRequest">A CreateIndexRequest object with parameters to use (AppID, AuthKey, RecreateIndex, etc). Set JsonFile and IndexName to empty.</param>
-        /// <returns>A ResultObj summarizing the operation.</returns>
+        public async Task<ResultObj> CreateIndexAsync(CreateIndexRequest createIndexRequest, int padToTokens)
+        {
+            var result = new ResultObj { Success = false, Message = "MessageAPI: CreateIndexAsync: " };
+
+            if (createIndexRequest == null)
+            {
+                result.Message += "Error: createIndexRequest is null.";
+                return result;
+            }
+
+            if (EncryptHelper.IsBadKey(_encryptKey, createIndexRequest.AuthKey, createIndexRequest.AppID))
+            {
+                result.Message += $" Error : Failed QueryIndexAsync bad AuthKey for AppID {createIndexRequest.AppID}";
+                _logger.LogError(result.Message);
+                return result;
+            }
+
+            if (string.IsNullOrWhiteSpace(createIndexRequest.IndexName))
+            {
+                result.Message += "Error: indexName is null or empty.";
+                return result;
+            }
+
+            if (string.IsNullOrWhiteSpace(createIndexRequest.JsonMapping) && string.IsNullOrWhiteSpace(createIndexRequest.JsonFile))
+            {
+                result.Message += "Error: JsonMapping and JsonFile are null or empty.";
+                return result;
+            }
+
+            try
+            {
+                string jsonContent = !string.IsNullOrEmpty(createIndexRequest.JsonFile)
+                    ? await File.ReadAllTextAsync(createIndexRequest.JsonFile)
+                    : createIndexRequest.JsonMapping;
+
+                if (string.IsNullOrWhiteSpace(jsonContent))
+                {
+                    result.Message += "Error: Json is null or empty.";
+                    return result;
+                }
+
+                var deserializer = _deserializers.FirstOrDefault(d => d.CanHandle(createIndexRequest.IndexName));
+                if (deserializer == null)
+                {
+                    result.Message += $"No deserialization strategy for index '{createIndexRequest.IndexName}'.";
+                    return result;
+                }
+
+                var items = deserializer.Deserialize(jsonContent);
+                if (items == null || items.Count == 0)
+                {
+                    result.Message += $"No items parsed from index '{createIndexRequest.IndexName}'.";
+                    return result;
+                }
+
+                Console.WriteLine($"Deserialization for index '{createIndexRequest.IndexName}' succeeded. Indexing with {padToTokens} tokens.");
+
+                var resultEn = await _openSearchHelper.EnsureIndexExistsAsync(indexName: createIndexRequest.IndexName, recreateIndex: createIndexRequest.RecreateIndex);
+                if (!resultEn.Success) return resultEn;
+
+                var resultIn = await _openSearchHelper.IndexDocumentsAsync(items, padToTokens);
+                createIndexRequest.Success = resultEn.Success && resultIn.Success;
+                createIndexRequest.Message += resultEn.Message + resultIn.Message;
+
+                await _rabbitRepo.PublishAsync("createIndexResult" + createIndexRequest.AppID, createIndexRequest);
+
+                result.Success = createIndexRequest.Success;
+                result.Message += createIndexRequest.Message;
+            }
+            catch (Exception ex)
+            {
+                result.Success = false;
+                result.Message += $"Error: Failed to create index '{createIndexRequest.IndexName}'. Exception: {ex.Message}";
+            }
+
+            return result;
+        }
+
         public async Task<ResultObj> CreateIndicesFromDataDirAsync(CreateIndexRequest createIndexRequest)
         {
             var result = new ResultObj();
@@ -343,7 +345,6 @@ namespace NetworkMonitor.Search.Services
                 return result;
             }
 
-            // Skip the index_config directory if present
             foreach (var indexDir in indexDirs)
             {
                 var indexName = Path.GetFileName(indexDir);
@@ -352,6 +353,7 @@ namespace NetworkMonitor.Search.Services
                     result.Message += $"Skipping special directory '{indexName}'.\n";
                     continue;
                 }
+
                 var jsonFiles = Directory.GetFiles(indexDir, "*.json");
                 if (jsonFiles.Length == 0)
                 {
@@ -359,75 +361,44 @@ namespace NetworkMonitor.Search.Services
                     continue;
                 }
 
-                // Instead of loading all data into memory, just keep track of the pad to token count as we go
-                var tempTokenizer = new AutoTokenizer(_modelParams.EmbeddingModelDir,_maxTokenLengthCap);
+                var tempTokenizer = new AutoTokenizer(_modelParams.EmbeddingModelDir, _maxTokenLengthCap);
                 int padToTokens = _minTokenLengthCap;
                 int actualMaxTokens = _minTokenLengthCap;
                 bool bailedEarly = false;
+
+                var estimator = _tokenEstimators.FirstOrDefault(t => t.CanHandle(indexName));
+                if (estimator == null)
+                {
+                    result.Message += $"No token estimation strategy found for index '{indexName}', skipping.\n";
+                    continue;
+                }
+
                 foreach (var jsonFile in jsonFiles)
                 {
                     if (bailedEarly) break;
                     var jsonContent = File.ReadAllText(jsonFile);
-                    if (indexName == "securitybooks")
+                    var sampleItems = _deserializers.First(d => d.CanHandle(indexName)).Deserialize(jsonContent);
+                    foreach (var item in sampleItems)
                     {
-                        var securityBooks = JsonConvert.DeserializeObject<List<SecurityBook>>(jsonContent);
-                        if (securityBooks != null)
+                        var fields = estimator.GetFields(item);
+                        foreach (var text in fields)
                         {
-                            foreach (var sb in securityBooks)
+                            int tokenCount = tempTokenizer.CountTokens(text);
+                            if (tokenCount > actualMaxTokens)
+                                actualMaxTokens = tokenCount;
+                            if (tokenCount > padToTokens)
+                                padToTokens = tokenCount;
+                            if (padToTokens >= _maxTokenLengthCap)
                             {
-                                foreach (var text in new[] { sb.Input, sb.Output, sb.Summary })
-                                {
-                                    if (!string.IsNullOrWhiteSpace(text))
-                                    {
-                                        int tokenCount = tempTokenizer.CountTokens(text);
-                                        if (tokenCount > actualMaxTokens)
-                                            actualMaxTokens = tokenCount;
-                                        if (tokenCount > padToTokens)
-                                            padToTokens = tokenCount;
-                                        if (padToTokens >= _maxTokenLengthCap)
-                                        {
-                                            bailedEarly = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                                if (bailedEarly) break;
+                                bailedEarly = true;
+                                break;
                             }
                         }
-                    }
-                    else
-                    {
-                        var documents = JsonConvert.DeserializeObject<List<Document>>(jsonContent);
-                        if (documents != null)
-                        {
-                            foreach (var d in documents)
-                            {
-                                foreach (var text in new[] { d.Input, d.Output })
-                                {
-                                    if (!string.IsNullOrWhiteSpace(text))
-                                    {
-                                        int tokenCount = tempTokenizer.CountTokens(text);
-                                        if (tokenCount > actualMaxTokens)
-                                            actualMaxTokens = tokenCount;
-                                        if (tokenCount > padToTokens)
-                                            padToTokens = tokenCount;
-                                        if (padToTokens >= _maxTokenLengthCap)
-                                        {
-                                            bailedEarly = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                                if (bailedEarly) break;
-                            }
-                        }
+                        if (bailedEarly) break;
                     }
                 }
 
-                // Cap at the value defined in EmbeddingGenerator
                 padToTokens = Math.Min(padToTokens, _maxTokenLengthCap);
-
-                // Store pad to token length and actual max tokens for this index (if not already set)
                 var (loadedMax, loadedActual) = LoadIndexMaxTokens(indexName);
                 if (!loadedMax.HasValue)
                 {
@@ -440,12 +411,10 @@ namespace NetworkMonitor.Search.Services
                         actualMaxTokens = loadedActual.Value;
                 }
 
-                // If there are any .json files, set RecreateIndex to true
                 bool shouldRecreateIndex = jsonFiles.Length > 0;
 
                 foreach (var jsonFile in jsonFiles)
                 {
-                    // Clone the request and set the index and file for this run
                     var req = new CreateIndexRequest
                     {
                         IndexName = indexName,
@@ -453,11 +422,10 @@ namespace NetworkMonitor.Search.Services
                         AppID = createIndexRequest.AppID,
                         AuthKey = createIndexRequest.AuthKey,
                         RecreateIndex = shouldRecreateIndex,
-                        JsonMapping = "", // always use file for this
+                        JsonMapping = "",
                         MessageID = createIndexRequest.MessageID
                     };
 
-                    // Pass the padToTokens for this index
                     var createResult = await CreateIndexAsync(req, padToTokens);
                     result.Message += $"Index '{indexName}', File '{Path.GetFileName(jsonFile)}': MaxTokensUsed {padToTokens}, ActualMaxTokens {actualMaxTokens} : {createResult.Message}\n";
                     if (!createResult.Success)

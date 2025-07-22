@@ -11,33 +11,24 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using OpenSearch.Net;
 using NetworkMonitor.Objects;
+
 namespace NetworkMonitor.Search.Services;
 
-public class Document
-{
-    public string Instruction { get; set; } = "";
-    public string Input { get; set; } = "";
-    public string Output { get; set; } = "";
-    public List<float> Embedding { get; set; } = new();
-}
 
-public class SecurityBook
-{
-    public string Input { get; set; } = "";
-    public string Output { get; set; } = "";
-    public string Summary { get; set; } = "";
-    public List<float> InputEmbedding { get; set; } = new();
-    public List<float> OutputEmbedding { get; set; } = new();
-    public List<float> SummaryEmbedding { get; set; } = new();
-}
 public class OpenSearchHelper
 {
     private readonly OpenSearchClient _client;
     private IEmbeddingGenerator _embeddingGenerator;
     private OSModelParams _modelParams;
+    private readonly IReadOnlyList<IIndexingStrategy> _strategies;
 
-    public OpenSearchHelper(OSModelParams modelParams, IEmbeddingGenerator embeddingGenerator)
+    public OpenSearchHelper(OSModelParams modelParams,
+                              IEmbeddingGenerator embeddingGenerator,
+                              params IIndexingStrategy[] strategies)
     {
+
+        _strategies = strategies;
+
         _modelParams = modelParams;
         _embeddingGenerator = embeddingGenerator;
         // Initialize OpenSearch client
@@ -56,111 +47,58 @@ public class OpenSearchHelper
     }
 
     // Method to load documents or securitybooks from JSON and index in OpenSearch
-    public async Task<ResultObj> IndexDocumentsAsync(IEnumerable<object> items, string indexName, int padToTokens)
+    public async Task<ResultObj> IndexDocumentsAsync(IEnumerable<object> items,
+                                                     int padToTokens)
     {
-        var result = new ResultObj() { Message = " EnsureIndexExistsAsync : " };
-        bool oneFail = false;
-        try
+        var result = new ResultObj { Message = "IndexDocumentsAsync: " };
+        bool failed = false;
+
+        foreach (var item in items)
         {
-            int docCount = items.Count();
-            int count = 0;
-            foreach (var item in items)
+            // Pick the first strategy that says it can handle this artefact
+            var strategy = _strategies.FirstOrDefault(s => s.CanHandle(item));
+            if (strategy is null)
             {
-                count++;
-                Console.WriteLine($"Indexing item {count} of {docCount}");
+                result.Message += $"No strategy found for type {item.GetType().Name}. Skipping. ";
+                failed = true;
+                continue;
+            }
 
-                string documentId = "";
-                object indexObject = null;
+            try
+            {
+                await strategy.EnsureEmbeddingsAsync(item, _embeddingGenerator, padToTokens);
 
-                if (indexName == "securitybooks" && item is SecurityBook securityBook)
+                var id = strategy.ComputeId(item);
+                var index = strategy.IndexName;
+                var exists = await _client.DocumentExistsAsync<object>(id, idx => idx.Index(index));
+
+                if (exists.Exists)
                 {
-                    // Generate embeddings for all fields if needed
-                    if (securityBook.InputEmbedding == null || securityBook.InputEmbedding.Count == 0)
-                    {
-                        securityBook.InputEmbedding = await GenerateEmbeddingAsync(securityBook.Input, padToTokens);
-                    }
-                    if (securityBook.OutputEmbedding == null || securityBook.OutputEmbedding.Count == 0)
-                    {
-                        securityBook.OutputEmbedding = await GenerateEmbeddingAsync(securityBook.Output, padToTokens);
-                    }
-                    if (securityBook.SummaryEmbedding == null || securityBook.SummaryEmbedding.Count == 0)
-                    {
-                        securityBook.SummaryEmbedding = await GenerateEmbeddingAsync(securityBook.Summary, padToTokens);
-                    }
-                    documentId = ComputeSha256Hash(securityBook.Output);
-                    // Check if the document already exists
-                    var existsResponse = await _client.DocumentExistsAsync(DocumentPath<SecurityBook>.Id(documentId), d => d.Index(indexName));
-                    if (existsResponse.Exists)
-                    {
-                        result.Message += $"SecurityBook with ID {documentId} already exists. Skipping indexing.";
-                        continue;
-                    }
-                    indexObject = new
-                    {
-                        input = securityBook.Input,
-                        output = securityBook.Output,
-                        summary = securityBook.Summary,
-                        input_embedding = securityBook.InputEmbedding,
-                        output_embedding = securityBook.OutputEmbedding,
-                        summary_embedding = securityBook.SummaryEmbedding
-                    };
-                }
-                else if (item is Document document)
-                {
-                    // Generate embedding if needed
-                    if (document.Embedding == null || document.Embedding.Count == 0)
-                    {
-                        document.Embedding = await GenerateEmbeddingAsync(document.Output, padToTokens);
-                    }
-                    documentId = ComputeSha256Hash(document.Output);
-                    // Check if the document already exists
-                    var existsResponse = await _client.DocumentExistsAsync(DocumentPath<Document>.Id(documentId), d => d.Index(indexName));
-                    if (existsResponse.Exists)
-                    {
-                        result.Message += $"Document with ID {documentId} already exists. Skipping indexing.";
-                        continue;
-                    }
-                    indexObject = new
-                    {
-                        input = document.Input,
-                        output = document.Output,
-                        embedding = document.Embedding
-                    };
-                }
-                else
-                {
-                    result.Message += "Unknown item type for indexing.";
-                    oneFail = true;
+                    result.Message += $"{index}/{id} already exists. Skipping. ";
                     continue;
                 }
 
-                // Index the new document or securitybook
-                var indexResponse = await _client.IndexAsync(indexObject, i => i.Index(indexName).Id(documentId));
+                var body = strategy.BuildIndexDocument(item);
+                var resp = await _client.IndexAsync(body, i => i.Index(index).Id(id));
 
-                if (!indexResponse.IsValid)
+                if (!resp.IsValid)
                 {
-                    oneFail = true;
-                    result.Message += $"Failed to index item with ID {documentId}: {indexResponse.ServerError}";
+                    failed = true;
+                    result.Message += $"Failed to index {index}/{id}: {resp.ServerError} ";
                 }
                 else
                 {
-                    if (indexName == "securitybooks")
-                    {
-                        result.Message += $"Indexing SecurityBook ID {documentId} with input_embedding: {string.Join(",", ((SecurityBook)item).InputEmbedding)}, output_embedding: {string.Join(",", ((SecurityBook)item).OutputEmbedding)}, summary_embedding: {string.Join(",", ((SecurityBook)item).SummaryEmbedding)}";
-                    }
-                    else
-                    {
-                        result.Message += $"Indexing item ID {documentId} with embedding: {string.Join(",", ((Document)item).Embedding)}";
-                    }
+                    result.Message += $"Indexed {index}/{id}. ";
                 }
             }
-            result.Success = !oneFail;
+            catch (Exception ex)
+            {
+                failed = true;
+                result.Message += $"Error for {item.GetType().Name}: {ex.Message} ";
+            }
         }
-        catch (Exception e)
-        {
-            result.Success = false;
-            result.Message += e.Message;
-        }
+
+        result.Success = !failed;
         return result;
     }
 
