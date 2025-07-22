@@ -61,38 +61,13 @@ namespace NetworkMonitor.Search
                 return systemParamsHelper.GetMLParams();
             });
 
-            services.AddSingleton<NovitaApiClient>(sp =>
-            {
-                var mlParams = sp.GetRequiredService<MLParams>();
-                var logger = sp.GetRequiredService<ILogger<NovitaApiClient>>();
-                var httpClient = new HttpClient
-                {
-                    BaseAddress = new Uri(mlParams.EmbeddingApiUrl)
-                };
-                return new NovitaApiClient(httpClient, logger);
-            });
+            services.AddSingleton<NovitaApiClient>();
 
+            services.AddSingleton<IEmbeddingGeneratorFactory, EmbeddingGeneratorFactory>();
             services.AddSingleton<IEmbeddingGenerator>(sp =>
             {
-                var mlParams = sp.GetRequiredService<MLParams>();
-                var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
-                if (mlParams.EmbeddingProvider.ToLower() == "api")
-                {
-                    if (string.IsNullOrWhiteSpace(mlParams.LlmHFKey))
-                        throw new Exception("LlmHFKey must be set in config for Novita embedding provider.");
-                    return new NovitaEmbeddingGenerator(
-                        mlParams,
-                        loggerFactory.CreateLogger<NovitaEmbeddingGenerator>(),
-                        sp.GetRequiredService<NovitaApiClient>()
-                    );
-                }
-                else
-                {
-                    return new EmbeddingGenerator(
-                        mlParams,
-                        loggerFactory.CreateLogger<EmbeddingGenerator>()
-                    );
-                }
+                var factory = sp.GetRequiredService<IEmbeddingGeneratorFactory>();
+                return factory.Create();
             });
 
           

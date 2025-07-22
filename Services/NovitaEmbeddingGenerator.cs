@@ -129,9 +129,12 @@ public class NovitaApiClient
     private readonly HttpClient _client;
     private readonly ILogger<NovitaApiClient> _logger;
 
-    public NovitaApiClient(HttpClient client, ILogger<NovitaApiClient> logger)
+    public NovitaApiClient(MLParams mlParams, ILogger<NovitaApiClient> logger)
     {
-        _client = client;
+        _client = new HttpClient
+        {
+            BaseAddress = new Uri(mlParams.EmbeddingApiUrl)
+        };
         _logger = logger;
     }
 
