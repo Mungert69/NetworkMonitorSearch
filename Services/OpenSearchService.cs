@@ -404,17 +404,16 @@ namespace NetworkMonitor.Search.Services
                         actualMaxTokens = loadedActual.Value;
                 }
 
-                bool shouldRecreateIndex = jsonFiles.Length > 0;
-
-                foreach (var jsonFile in jsonFiles)
+                for (int i = 0; i < jsonFiles.Length; i++)
                 {
+                    var jsonFile = jsonFiles[i];
                     var req = new CreateIndexRequest
                     {
                         IndexName = indexName,
                         JsonFile = jsonFile,
                         AppID = createIndexRequest.AppID,
                         AuthKey = createIndexRequest.AuthKey,
-                        RecreateIndex = shouldRecreateIndex,
+                        RecreateIndex = (i == 0), // Only recreate for the first file
                         JsonMapping = "",
                         MessageID = createIndexRequest.MessageID
                     };
