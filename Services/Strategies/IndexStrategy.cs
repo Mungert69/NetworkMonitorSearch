@@ -110,20 +110,19 @@ public sealed class DocumentIndexingStrategy : IIndexingStrategy
         };
     }
     // documents
-    public string GetIndexMapping(int dim) => $@"
+   public string GetIndexMapping(int dim) => $@"
 {{
   ""settings"": {{ ""index"": {{ ""knn"": true }} }},
   ""mappings"": {{
     ""properties"": {{
       ""input""  : {{ ""type"": ""text"" }},
-      ""output"" : {{ ""type"": ""text"" }},
+      ""output"" : {{ ""type"": ""text"" }}
 
       ""input_embedding"" :  {{ ""type"": ""knn_vector"", ""dimension"": {dim},
                                ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }},
 
       ""output_embedding"" : {{ ""type"": ""knn_vector"", ""dimension"": {dim},
                                ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }}
-
     }}
   }}
 }}";
