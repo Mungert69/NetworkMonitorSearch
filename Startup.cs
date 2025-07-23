@@ -63,7 +63,7 @@ namespace NetworkMonitor.Search
              services.AddSingleton<SystemParams>(sp =>
             {
                 var systemParamsHelper = sp.GetRequiredService<ISystemParamsHelper>();
-                return systemParamsHelper.GetSystemParams;
+                return systemParamsHelper.GetSystemParams();
             });
 
             services.AddSingleton<NovitaApiClient>();

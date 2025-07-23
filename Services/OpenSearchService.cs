@@ -53,7 +53,17 @@ namespace NetworkMonitor.Search.Services
             _logger = logger;
             _rabbitRepo = rabbitRepo;
 
-            _modelParams = mlParams;
+            // Map MLParams to OSModelParams
+            _modelParams = new OSModelParams
+            {
+                EmbeddingModelDir = mlParams.EmbeddingModelDir,
+                EmbeddingModelVecDim = mlParams.EmbeddingModelVecDim,
+                User = mlParams.OpenSearchUser,
+                Key = mlParams.OpenSearchKey,
+                Url = mlParams.OpenSearchUrl,
+                DefaultIndex = mlParams.OpenSearchDefaultIndex
+                // Add any other properties that need to be mapped
+            };
             _llmThreads = mlParams.LlmThreads;
             _maxTokenLengthCap = mlParams.MaxTokenLengthCap;
             _minTokenLengthCap = mlParams.MinTokenLengthCap;
