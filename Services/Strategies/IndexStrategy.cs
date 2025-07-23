@@ -65,11 +65,11 @@ internal static class IdHelper
 public sealed class DocumentIndexingStrategy : IIndexingStrategy
 {
     public string IndexName => "documents";
-   
+
     public string ContentVectorFieldName => "output_embedding";
     public string QuestionVectorFieldName => "input_embedding";
 
-  public string GetVectorField(VectorSearchMode mode) => mode switch
+    public string GetVectorField(VectorSearchMode mode) => mode switch
     {
         VectorSearchMode.question => QuestionVectorFieldName,
         _ => ContentVectorFieldName
@@ -88,29 +88,40 @@ public sealed class DocumentIndexingStrategy : IIndexingStrategy
                                             IEmbeddingGenerator generator,
                                             int padToTokens)
     {
-        var doc = (Document)item;
-        if (doc.Embedding is { Count: > 0 }) return;
+        var sb = (Document)item;
 
-        doc.Embedding = await generator.GenerateEmbeddingAsync(doc.Output, padToTokens);
-        if (doc.Embedding.Count == 0)
-            throw new InvalidOperationException("Failed to generate embedding for Document.");
+        async Task Ensure(Func<List<float>> get, Action<List<float>> set, string sourceText)
+        {
+            if (get() is { Count: > 0 }) return;
+
+            var emb = await generator.GenerateEmbeddingAsync(sourceText, padToTokens);
+            if (emb.Count == 0)
+                throw new InvalidOperationException($"Failed to generate embedding for '{sourceText}'.");
+            set(emb);
+        }
+
+        await Ensure(() => sb.InputEmbedding, e => sb.InputEmbedding = e, sb.Input);
+        await Ensure(() => sb.OutputEmbedding, e => sb.OutputEmbedding = e, sb.Output);
+
     }
+
 
     public string ComputeId(object item) =>
         IdHelper.Sha256(((Document)item).Output);
 
     public object BuildIndexDocument(object item)
     {
-        var d = (Document)item;
+        var sb = (Document)item;
         return new
         {
-            input = d.Input,
-            output = d.Output,
-            embedding = d.Embedding
+            input = sb.Input,
+            output = sb.Output,
+            input_embedding = sb.InputEmbedding,
+            output_embedding = sb.OutputEmbedding
         };
     }
     // documents
-   public string GetIndexMapping(int dim) => $@"
+    public string GetIndexMapping(int dim) => $@"
 {{
   ""settings"": {{ ""index"": {{ ""knn"": true }} }},
   ""mappings"": {{
@@ -141,7 +152,7 @@ public sealed class MitreIndexingStrategy : IIndexingStrategy
             ContentVectorFieldName;
     public IReadOnlyDictionary<string, float> GetDefaultFieldWeights() =>
             new Dictionary<string, float> { [ContentVectorFieldName] = 1f };
-    public bool CanHandle(object item) => item is Document;
+    public bool CanHandle(object item) => item is Mitre;
     public bool CanHandle(string indexName) => indexName.Equals("mitre", StringComparison.OrdinalIgnoreCase);
 
 
@@ -149,7 +160,7 @@ public sealed class MitreIndexingStrategy : IIndexingStrategy
                                             IEmbeddingGenerator generator,
                                             int padToTokens)
     {
-        var doc = (Document)item;
+        var doc = (Mitre)item;
         if (doc.Embedding is { Count: > 0 }) return;
 
         doc.Embedding = await generator.GenerateEmbeddingAsync(doc.Output, padToTokens);
@@ -158,11 +169,11 @@ public sealed class MitreIndexingStrategy : IIndexingStrategy
     }
 
     public string ComputeId(object item) =>
-        IdHelper.Sha256(((Document)item).Output);
+        IdHelper.Sha256(((Mitre)item).Output);
 
     public object BuildIndexDocument(object item)
     {
-        var d = (Document)item;
+        var d = (Mitre)item;
         return new
         {
             input = d.Input,
@@ -188,7 +199,7 @@ public sealed class MitreIndexingStrategy : IIndexingStrategy
 }}";
     public List<object> Deserialize(string json)
     {
-        var list = JsonConvert.DeserializeObject<List<Document>>(json);
+        var list = JsonConvert.DeserializeObject<List<Mitre>>(json);
         return list?.Cast<object>().ToList() ?? new List<object>();
     }
 }
@@ -288,7 +299,13 @@ public sealed class SecurityBookIndexingStrategy : IIndexingStrategy
 
 public class Document
 {
-    public string Instruction { get; set; } = "";
+    public string Input { get; set; } = "";
+    public string Output { get; set; } = "";
+    public List<float> InputEmbedding { get; set; } = new();
+    public List<float> OutputEmbedding { get; set; } = new();
+}
+public class Mitre
+{
     public string Input { get; set; } = "";
     public string Output { get; set; } = "";
     public List<float> Embedding { get; set; } = new();
