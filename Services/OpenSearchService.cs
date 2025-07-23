@@ -18,8 +18,8 @@ namespace NetworkMonitor.Search.Services
         Task<ResultObj> QueryIndexAsync(QueryIndexRequest queryIndexRequest);
 
         // New methods for snapshot and bulk index creation
-        Task<ResultObj> CreateSnapshotAsync(string snapshotRepo, string snapshotName, string indices = "documents,securitybooks");
-        Task<ResultObj> RestoreSnapshotAsync(string snapshotRepo, string snapshotName, string indices = "documents,securitybooks");
+        Task<ResultObj> CreateSnapshotAsync(string snapshotRepo, string snapshotName, string indices = "documents,mitre,securitybooks");
+        Task<ResultObj> RestoreSnapshotAsync(string snapshotRepo, string snapshotName, string indices = "documents,mitre,securitybooks");
         Task<ResultObj> CreateIndicesFromDataDirAsync(CreateIndexRequest createIndexRequest);
 
         // Add both overloads for CreateIndexAsync
@@ -96,7 +96,7 @@ namespace NetworkMonitor.Search.Services
         }
 
         // Create a snapshot for the given indices
-        public async Task<ResultObj> CreateSnapshotAsync(string snapshotRepo, string snapshotName, string indices = "documents,securitybooks")
+        public async Task<ResultObj> CreateSnapshotAsync(string snapshotRepo, string snapshotName, string indices = "documents,mitre,securitybooks")
         {
             var result = new ResultObj();
             try
@@ -138,7 +138,7 @@ namespace NetworkMonitor.Search.Services
         }
 
         // Restore a snapshot for the given indices
-        public async Task<ResultObj> RestoreSnapshotAsync(string snapshotRepo, string snapshotName, string indices = "documents,securitybooks")
+        public async Task<ResultObj> RestoreSnapshotAsync(string snapshotRepo, string snapshotName, string indices )
         {
             var result = new ResultObj();
             try
