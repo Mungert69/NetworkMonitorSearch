@@ -63,14 +63,14 @@ internal static class IdHelper
 //  Strategy for plain 'Document'
 public sealed class DocumentIndexingStrategy : IIndexingStrategy
 {
-    public string IndexName => "documents";
+    public string IndexName => "mitre";
     public string ContentVectorFieldName => "embedding";
     public string GetVectorField(VectorSearchMode mode) =>
             ContentVectorFieldName;
     public IReadOnlyDictionary<string, float> GetDefaultFieldWeights() =>
             new Dictionary<string, float> { [ContentVectorFieldName] = 1f };
     public bool CanHandle(object item) => item is Document;
-    public bool CanHandle(string indexName) => indexName.Equals("documents", StringComparison.OrdinalIgnoreCase);
+    public bool CanHandle(string indexName) => indexName.Equals("mitre", StringComparison.OrdinalIgnoreCase);
 
 
     public async Task EnsureEmbeddingsAsync(object item,
@@ -98,7 +98,7 @@ public sealed class DocumentIndexingStrategy : IIndexingStrategy
             embedding = d.Embedding
         };
     }
-    // documents
+    // mitre
     public string GetIndexMapping(int dim) => $@"
 {{
   ""settings"": {{ ""index"": {{ ""knn"": true }} }},

@@ -19,7 +19,7 @@ public interface ITokenEstimationStrategy
 }
 public class DocumentTokenEstimationStrategy : ITokenEstimationStrategy
 {
-    public bool CanHandle(string indexName) => indexName.Equals("documents", StringComparison.OrdinalIgnoreCase);
+    public bool CanHandle(string indexName) => indexName.Equals("mitre", StringComparison.OrdinalIgnoreCase);
     public IEnumerable<string> GetFields(object item)
     {
         if (item is Document doc)
