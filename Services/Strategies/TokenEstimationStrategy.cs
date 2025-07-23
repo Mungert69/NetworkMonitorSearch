@@ -17,9 +17,11 @@ public interface ITokenEstimationStrategy
 
     (int padToTokens, int actualMax) EstimatePadding(IEnumerable<string> jsonFiles, string embeddingModelDir, int maxCap, int minCap);
 }
-public class DocumentTokenEstimationStrategy : ITokenEstimationStrategy
+public class DefaulTokenEstimationStrategy : ITokenEstimationStrategy
 {
-    public bool CanHandle(string indexName) => indexName.Equals("mitre", StringComparison.OrdinalIgnoreCase);
+    public bool CanHandle(string indexName) =>
+        indexName.Equals("mitre", StringComparison.OrdinalIgnoreCase) ||
+        indexName.Equals("documents", StringComparison.OrdinalIgnoreCase);
     public IEnumerable<string> GetFields(object item)
     {
         if (item is Document doc)

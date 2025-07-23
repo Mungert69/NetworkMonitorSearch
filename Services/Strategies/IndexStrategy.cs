@@ -59,9 +59,82 @@ internal static class IdHelper
     }
 }
 
+
 //  ------------------------------------------------------------------------------
-//  Strategy for plain 'Document'
+//  Strategy for plain 'Documents'
 public sealed class DocumentIndexingStrategy : IIndexingStrategy
+{
+    public string IndexName => "documents";
+   
+    public string ContentVectorFieldName => "output_embedding";
+    public string QuestionVectorFieldName => "input_embedding";
+
+  public string GetVectorField(VectorSearchMode mode) => mode switch
+    {
+        VectorSearchMode.question => QuestionVectorFieldName,
+        _ => ContentVectorFieldName
+    };
+    public IReadOnlyDictionary<string, float> GetDefaultFieldWeights() =>
+          new Dictionary<string, float>
+          {
+              [QuestionVectorFieldName] = 1f,
+              [ContentVectorFieldName] = 1f
+          };
+    public bool CanHandle(object item) => item is Document;
+    public bool CanHandle(string indexName) => indexName.Equals("documents", StringComparison.OrdinalIgnoreCase);
+
+
+    public async Task EnsureEmbeddingsAsync(object item,
+                                            IEmbeddingGenerator generator,
+                                            int padToTokens)
+    {
+        var doc = (Document)item;
+        if (doc.Embedding is { Count: > 0 }) return;
+
+        doc.Embedding = await generator.GenerateEmbeddingAsync(doc.Output, padToTokens);
+        if (doc.Embedding.Count == 0)
+            throw new InvalidOperationException("Failed to generate embedding for Document.");
+    }
+
+    public string ComputeId(object item) =>
+        IdHelper.Sha256(((Document)item).Output);
+
+    public object BuildIndexDocument(object item)
+    {
+        var d = (Document)item;
+        return new
+        {
+            input = d.Input,
+            output = d.Output,
+            embedding = d.Embedding
+        };
+    }
+    // documents
+    public string GetIndexMapping(int dim) => $@"
+{{
+  ""settings"": {{ ""index"": {{ ""knn"": true }} }},
+  ""mappings"": {{
+    ""properties"": {{
+      ""input""  : {{ ""type"": ""text"" }},
+      ""output"" : {{ ""type"": ""text"" }},
+
+      ""input_embedding"" :  {{ ""type"": ""knn_vector"", ""dimension"": {dim},
+                               ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }},
+
+      ""output_embedding"" : {{ ""type"": ""knn_vector"", ""dimension"": {dim},
+                               ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }},
+
+    }}
+  }}
+}}";
+    public List<object> Deserialize(string json)
+    {
+        var list = JsonConvert.DeserializeObject<List<Document>>(json);
+        return list?.Cast<object>().ToList() ?? new List<object>();
+    }
+}
+
+public sealed class MitreIndexingStrategy : IIndexingStrategy
 {
     public string IndexName => "mitre";
     public string ContentVectorFieldName => "embedding";

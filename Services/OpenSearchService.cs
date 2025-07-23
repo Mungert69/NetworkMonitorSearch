@@ -75,13 +75,14 @@ namespace NetworkMonitor.Search.Services
             _strategies = new IIndexingStrategy[]
             {
                 new DocumentIndexingStrategy(),
+                new MitreIndexingStrategy(),
                 new SecurityBookIndexingStrategy()
             };
 
 
             _tokenEstimators = new List<ITokenEstimationStrategy>
             {
-                new DocumentTokenEstimationStrategy(),
+                new DefaulTokenEstimationStrategy(),
                 new SecurityBookTokenEstimationStrategy()
             };
 
