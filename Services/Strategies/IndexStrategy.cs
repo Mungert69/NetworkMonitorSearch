@@ -19,30 +19,73 @@ namespace NetworkMonitor.Search.Services;
 
 public interface IIndexingStrategy
 {
-    /// Logical name of the OpenSearch index this artefact lives in
     string IndexName { get; }
-
     string GetVectorField(VectorSearchMode mode);
     IReadOnlyDictionary<string, float> GetDefaultFieldWeights();
     string GetIndexMapping(int vectorDimension);
     List<object> Deserialize(string json);
-
-
-    /// Ensure that the artefact has every embedding it needs; generate
-    /// anything that is missing.
-    Task EnsureEmbeddingsAsync(object item,
-                               IEmbeddingGenerator generator,
-                               int padToTokens);
-
-    /// A deterministic, collision‑resistant ID (e.g. SHA‑256 of some field)
+    Task EnsureEmbeddingsAsync(object item, IEmbeddingGenerator generator, int padToTokens);
     string ComputeId(object item);
-
-    /// Shape the payload to be written into OpenSearch.
     object BuildIndexDocument(object item);
-
-    /// Returns true if this strategy can handle <paramref name="item"/>.
     bool CanHandle(object item);
     bool CanHandle(string indexName);
+
+    // Token estimation
+    IEnumerable<string> GetFields(object item);
+    (int padToTokens, int actualMax) EstimatePadding(IEnumerable<string> jsonFiles, string embeddingModelDir, int maxCap, int minCap);
+}
+
+/// <summary>
+/// Generic base class for index strategies.
+/// </summary>
+public abstract class IndexingStrategyBase<T> : IIndexingStrategy where T : class, new()
+{
+    public abstract string IndexName { get; }
+    public abstract string GetVectorField(VectorSearchMode mode);
+    public abstract IReadOnlyDictionary<string, float> GetDefaultFieldWeights();
+    public abstract string GetIndexMapping(int vectorDimension);
+
+    public virtual List<object> Deserialize(string json)
+    {
+        var list = JsonConvert.DeserializeObject<List<T>>(json);
+        return list?.Cast<object>().ToList() ?? new List<object>();
+    }
+
+    public abstract Task EnsureEmbeddingsAsync(object item, IEmbeddingGenerator generator, int padToTokens);
+    public abstract string ComputeId(object item);
+    public abstract object BuildIndexDocument(object item);
+
+    public virtual bool CanHandle(object item) => item is T;
+    public virtual bool CanHandle(string indexName) => indexName.Equals(IndexName, StringComparison.OrdinalIgnoreCase);
+
+    // Token estimation logic
+    public abstract IEnumerable<string> GetFields(object item);
+
+    public virtual (int padToTokens, int actualMax) EstimatePadding(IEnumerable<string> jsonFiles, string modelDir, int maxCap, int minCap)
+    {
+        var tokenizer = new AutoTokenizer(modelDir, maxCap);
+        int pad = minCap;
+        int maxSeen = minCap;
+
+        foreach (var file in jsonFiles)
+        {
+            var items = JsonConvert.DeserializeObject<List<T>>(System.IO.File.ReadAllText(file)) ?? new();
+            foreach (var item in items)
+            {
+                foreach (var text in GetFields(item))
+                {
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        int tokens = tokenizer.CountTokens(text);
+                        maxSeen = Math.Max(maxSeen, tokens);
+                        pad = Math.Max(pad, tokens);
+                        if (pad >= maxCap) return (pad, maxSeen);
+                    }
+                }
+            }
+        }
+        return (pad, maxSeen);
+    }
 }
 
 //  ------------------------------------------------------------------------------
@@ -62,31 +105,32 @@ internal static class IdHelper
 
 //  ------------------------------------------------------------------------------
 //  Strategy for plain 'Documents'
-public sealed class DocumentIndexingStrategy : IIndexingStrategy
+public sealed class DocumentIndexingStrategy : IndexingStrategyBase<Document>
 {
-    public string IndexName => "documents";
-
+    public override string IndexName => "documents";
     public string ContentVectorFieldName => "output_embedding";
     public string QuestionVectorFieldName => "input_embedding";
 
-    public string GetVectorField(VectorSearchMode mode) => mode switch
+    public override string GetVectorField(VectorSearchMode mode) => mode switch
     {
         VectorSearchMode.question => QuestionVectorFieldName,
         _ => ContentVectorFieldName
     };
-    public IReadOnlyDictionary<string, float> GetDefaultFieldWeights() =>
-          new Dictionary<string, float>
-          {
-              [QuestionVectorFieldName] = 1f,
-              [ContentVectorFieldName] = 1f
-          };
-    public bool CanHandle(object item) => item is Document;
-    public bool CanHandle(string indexName) => indexName.Equals("documents", StringComparison.OrdinalIgnoreCase);
+    public override IReadOnlyDictionary<string, float> GetDefaultFieldWeights() =>
+        new Dictionary<string, float>
+        {
+            [QuestionVectorFieldName] = 1f,
+            [ContentVectorFieldName] = 1f
+        };
 
+    public override IEnumerable<string> GetFields(object item)
+    {
+        if (item is Document doc)
+            return new[] { doc.Input, doc.Output };
+        return Enumerable.Empty<string>();
+    }
 
-    public async Task EnsureEmbeddingsAsync(object item,
-                                            IEmbeddingGenerator generator,
-                                            int padToTokens)
+    public override async Task EnsureEmbeddingsAsync(object item, IEmbeddingGenerator generator, int padToTokens)
     {
         var sb = (Document)item;
 
@@ -102,14 +146,12 @@ public sealed class DocumentIndexingStrategy : IIndexingStrategy
 
         await Ensure(() => sb.InputEmbedding, e => sb.InputEmbedding = e, sb.Input);
         await Ensure(() => sb.OutputEmbedding, e => sb.OutputEmbedding = e, sb.Output);
-
     }
 
-
-    public string ComputeId(object item) =>
+    public override string ComputeId(object item) =>
         IdHelper.Sha256(((Document)item).Output);
 
-    public object BuildIndexDocument(object item)
+    public override object BuildIndexDocument(object item)
     {
         var sb = (Document)item;
         return new
@@ -120,45 +162,39 @@ public sealed class DocumentIndexingStrategy : IIndexingStrategy
             output_embedding = sb.OutputEmbedding
         };
     }
-    // documents
-    public string GetIndexMapping(int dim) => $@"
+
+    public override string GetIndexMapping(int dim) => $@"
 {{
   ""settings"": {{ ""index"": {{ ""knn"": true }} }},
   ""mappings"": {{
     ""properties"": {{
       ""input""  : {{ ""type"": ""text"" }},
-      ""output"" : {{ ""type"": ""text"" }}
-
+      ""output"" : {{ ""type"": ""text"" }},
       ""input_embedding"" :  {{ ""type"": ""knn_vector"", ""dimension"": {dim},
                                ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }},
-
       ""output_embedding"" : {{ ""type"": ""knn_vector"", ""dimension"": {dim},
                                ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }}
     }}
   }}
 }}";
-    public List<object> Deserialize(string json)
-    {
-        var list = JsonConvert.DeserializeObject<List<Document>>(json);
-        return list?.Cast<object>().ToList() ?? new List<object>();
-    }
 }
 
-public sealed class MitreIndexingStrategy : IIndexingStrategy
+public sealed class MitreIndexingStrategy : IndexingStrategyBase<Mitre>
 {
-    public string IndexName => "mitre";
+    public override string IndexName => "mitre";
     public string ContentVectorFieldName => "embedding";
-    public string GetVectorField(VectorSearchMode mode) =>
-            ContentVectorFieldName;
-    public IReadOnlyDictionary<string, float> GetDefaultFieldWeights() =>
-            new Dictionary<string, float> { [ContentVectorFieldName] = 1f };
-    public bool CanHandle(object item) => item is Mitre;
-    public bool CanHandle(string indexName) => indexName.Equals("mitre", StringComparison.OrdinalIgnoreCase);
+    public override string GetVectorField(VectorSearchMode mode) => ContentVectorFieldName;
+    public override IReadOnlyDictionary<string, float> GetDefaultFieldWeights() =>
+        new Dictionary<string, float> { [ContentVectorFieldName] = 1f };
 
+    public override IEnumerable<string> GetFields(object item)
+    {
+        if (item is Mitre doc)
+            return new[] { doc.Input, doc.Output };
+        return Enumerable.Empty<string>();
+    }
 
-    public async Task EnsureEmbeddingsAsync(object item,
-                                            IEmbeddingGenerator generator,
-                                            int padToTokens)
+    public override async Task EnsureEmbeddingsAsync(object item, IEmbeddingGenerator generator, int padToTokens)
     {
         var doc = (Mitre)item;
         if (doc.Embedding is { Count: > 0 }) return;
@@ -168,10 +204,10 @@ public sealed class MitreIndexingStrategy : IIndexingStrategy
             throw new InvalidOperationException("Failed to generate embedding for Document.");
     }
 
-    public string ComputeId(object item) =>
+    public override string ComputeId(object item) =>
         IdHelper.Sha256(((Mitre)item).Output);
 
-    public object BuildIndexDocument(object item)
+    public override object BuildIndexDocument(object item)
     {
         var d = (Mitre)item;
         return new
@@ -181,8 +217,8 @@ public sealed class MitreIndexingStrategy : IIndexingStrategy
             embedding = d.Embedding
         };
     }
-    // mitre
-    public string GetIndexMapping(int dim) => $@"
+
+    public override string GetIndexMapping(int dim) => $@"
 {{
   ""settings"": {{ ""index"": {{ ""knn"": true }} }},
   ""mappings"": {{
@@ -197,43 +233,39 @@ public sealed class MitreIndexingStrategy : IIndexingStrategy
     }}
   }}
 }}";
-    public List<object> Deserialize(string json)
-    {
-        var list = JsonConvert.DeserializeObject<List<Mitre>>(json);
-        return list?.Cast<object>().ToList() ?? new List<object>();
-    }
 }
 
 //  ------------------------------------------------------------------------------
 //  Strategy for 'SecurityBook'
-public sealed class SecurityBookIndexingStrategy : IIndexingStrategy
+public sealed class SecurityBookIndexingStrategy : IndexingStrategyBase<SecurityBook>
 {
-    public string IndexName => "securitybooks";
-
+    public override string IndexName => "securitybooks";
     public string ContentVectorFieldName => "output_embedding";
     public string QuestionVectorFieldName => "input_embedding";
     public string SummaryVectorFieldName => "summary_embedding";
-    public string GetVectorField(VectorSearchMode mode) => mode switch
+    public override string GetVectorField(VectorSearchMode mode) => mode switch
     {
         VectorSearchMode.question => QuestionVectorFieldName,
         VectorSearchMode.summary => SummaryVectorFieldName,
         _ => ContentVectorFieldName
     };
 
-    public IReadOnlyDictionary<string, float> GetDefaultFieldWeights() =>
-       new Dictionary<string, float>
-       {
-           [QuestionVectorFieldName] = 1f,
-           [ContentVectorFieldName] = 1f,
-           [SummaryVectorFieldName] = 1f
-       };
-    public bool CanHandle(object item) => item is SecurityBook;
-    public bool CanHandle(string indexName) => indexName.Equals("securitybooks", StringComparison.OrdinalIgnoreCase);
+    public override IReadOnlyDictionary<string, float> GetDefaultFieldWeights() =>
+        new Dictionary<string, float>
+        {
+            [QuestionVectorFieldName] = 1f,
+            [ContentVectorFieldName] = 1f,
+            [SummaryVectorFieldName] = 1f
+        };
 
+    public override IEnumerable<string> GetFields(object item)
+    {
+        if (item is SecurityBook book)
+            return new[] { book.Input, book.Output, book.Summary };
+        return Enumerable.Empty<string>();
+    }
 
-    public async Task EnsureEmbeddingsAsync(object item,
-                                            IEmbeddingGenerator generator,
-                                            int padToTokens)
+    public override async Task EnsureEmbeddingsAsync(object item, IEmbeddingGenerator generator, int padToTokens)
     {
         var sb = (SecurityBook)item;
 
@@ -252,10 +284,10 @@ public sealed class SecurityBookIndexingStrategy : IIndexingStrategy
         await Ensure(() => sb.SummaryEmbedding, e => sb.SummaryEmbedding = e, sb.Summary);
     }
 
-    public string ComputeId(object item) =>
+    public override string ComputeId(object item) =>
         IdHelper.Sha256(((SecurityBook)item).Output);
 
-    public object BuildIndexDocument(object item)
+    public override object BuildIndexDocument(object item)
     {
         var sb = (SecurityBook)item;
         return new
@@ -268,8 +300,8 @@ public sealed class SecurityBookIndexingStrategy : IIndexingStrategy
             summary_embedding = sb.SummaryEmbedding
         };
     }
-    // securitybooks
-    public string GetIndexMapping(int dim) => $@"
+
+    public override string GetIndexMapping(int dim) => $@"
 {{
   ""settings"": {{ ""index"": {{ ""knn"": true }} }},
   ""mappings"": {{
@@ -277,24 +309,15 @@ public sealed class SecurityBookIndexingStrategy : IIndexingStrategy
       ""input""  : {{ ""type"": ""text"" }},
       ""output"" : {{ ""type"": ""text"" }},
       ""summary"": {{ ""type"": ""text"" }},
-
       ""input_embedding"" :  {{ ""type"": ""knn_vector"", ""dimension"": {dim},
                                ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }},
-
       ""output_embedding"" : {{ ""type"": ""knn_vector"", ""dimension"": {dim},
                                ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }},
-
       ""summary_embedding"" : {{ ""type"": ""knn_vector"", ""dimension"": {dim},
                                 ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }}
     }}
   }}
 }}";
-    public List<object> Deserialize(string json)
-    {
-        var list = JsonConvert.DeserializeObject<List<SecurityBook>>(json);
-        return list?.Cast<object>().ToList() ?? new List<object>();
-    }
-
 }
 
 public class Document

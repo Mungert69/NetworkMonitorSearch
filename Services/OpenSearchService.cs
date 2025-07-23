@@ -39,7 +39,6 @@ namespace NetworkMonitor.Search.Services
         private int _maxTokenLengthCap;
         private int _minTokenLengthCap;
         private int _llmThreads;
-        private readonly List<ITokenEstimationStrategy> _tokenEstimators;
         private readonly IIndexingStrategy[] _strategies;
 
         public OpenSearchService(
@@ -77,14 +76,6 @@ namespace NetworkMonitor.Search.Services
                 new MitreIndexingStrategy(),
                 new DocumentIndexingStrategy(),
                 new SecurityBookIndexingStrategy()
-            };
-
-
-            _tokenEstimators = new List<ITokenEstimationStrategy>
-            {
-                new MitreTokenEstimationStrategy(),
-                new DocumentTokenEstimationStrategy(),
-                new SecurityBookTokenEstimationStrategy()
             };
 
             _openSearchHelper = new OpenSearchHelper(_modelParams, embeddingGenerator, _strategies);
@@ -365,42 +356,17 @@ namespace NetworkMonitor.Search.Services
                     continue;
                 }
 
-                var tempTokenizer = new AutoTokenizer(_modelParams.EmbeddingModelDir, _maxTokenLengthCap);
                 int padToTokens = _minTokenLengthCap;
                 int actualMaxTokens = _minTokenLengthCap;
-                bool bailedEarly = false;
 
-                var estimator = _tokenEstimators.FirstOrDefault(t => t.CanHandle(indexName));
-                if (estimator == null)
+                var strategy = _strategies.FirstOrDefault(s => s.CanHandle(indexName));
+                if (strategy == null)
                 {
-                    result.Message += $"No token estimation strategy found for index '{indexName}', skipping.\n";
+                    result.Message += $"No indexing strategy found for index '{indexName}', skipping.\n";
                     continue;
                 }
 
-                foreach (var jsonFile in jsonFiles)
-                {
-                    if (bailedEarly) break;
-                    var jsonContent = File.ReadAllText(jsonFile);
-                    var sampleItems = _strategies.First(d => d.CanHandle(indexName)).Deserialize(jsonContent);
-                    foreach (var item in sampleItems)
-                    {
-                        var fields = estimator.GetFields(item);
-                        foreach (var text in fields)
-                        {
-                            int tokenCount = tempTokenizer.CountTokens(text);
-                            if (tokenCount > actualMaxTokens)
-                                actualMaxTokens = tokenCount;
-                            if (tokenCount > padToTokens)
-                                padToTokens = tokenCount;
-                            if (padToTokens >= _maxTokenLengthCap)
-                            {
-                                bailedEarly = true;
-                                break;
-                            }
-                        }
-                        if (bailedEarly) break;
-                    }
-                }
+                (padToTokens, actualMaxTokens) = strategy.EstimatePadding(jsonFiles, _modelParams.EmbeddingModelDir, _maxTokenLengthCap, _minTokenLengthCap);
 
                 padToTokens = Math.Min(padToTokens, _maxTokenLengthCap);
                 var (loadedMax, loadedActual) = LoadIndexMaxTokens(indexName);
