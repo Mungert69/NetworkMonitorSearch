@@ -25,15 +25,15 @@ namespace NetworkMonitor.Search.Services
     {
         private readonly IOpenSearchService _openSearchService;
 
-        public RabbitListener(IOpenSearchService openSearchService, ILogger<RabbitListenerBase> logger, ISystemParamsHelper systemParamsHelper)
-            : base(logger, DeriveSystemUrl(systemParamsHelper))
+        public RabbitListener(IOpenSearchService openSearchService, ILogger<RabbitListenerBase> logger, SystemParams systemParams)
+            : base(logger, DeriveSystemUrl(systemParams))
         {
             _openSearchService = openSearchService;
         }
 
-        private static SystemUrl DeriveSystemUrl(ISystemParamsHelper systemParamsHelper)
+        private static SystemUrl DeriveSystemUrl(SystemParams systemParams)
         {
-            return systemParamsHelper.GetSystemParams().ThisSystemUrl;
+            return systemParams.ThisSystemUrl;
         }
 
         protected override void InitRabbitMQObjs()
