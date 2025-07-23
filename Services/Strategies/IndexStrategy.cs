@@ -122,7 +122,7 @@ public sealed class DocumentIndexingStrategy : IIndexingStrategy
                                ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }},
 
       ""output_embedding"" : {{ ""type"": ""knn_vector"", ""dimension"": {dim},
-                               ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }},
+                               ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }}
 
     }}
   }}
