@@ -30,7 +30,7 @@ namespace NetworkMonitor.Search.Services
     public class OpenSearchService : IOpenSearchService
     {
         private readonly OpenSearchHelper _openSearchHelper;
-        private readonly string _encryptKey;
+        private readonly string _llmEncryptKey;
         private OSModelParams _modelParams = new OSModelParams();
         private readonly ILogger _logger;
         private readonly IRabbitRepo _rabbitRepo;
@@ -68,7 +68,7 @@ namespace NetworkMonitor.Search.Services
             _minTokenLengthCap = mlParams.MinTokenLengthCap;
             
             _dataDir = systemParams.DataDir;
-            _encryptKey = systemParams.LLMEncryptKey;
+            _llmEncryptKey = systemParams.LLMEncryptKey;
 
 
             _strategies = new IIndexingStrategy[]
@@ -252,7 +252,7 @@ namespace NetworkMonitor.Search.Services
                 return result;
             }
 
-            if (EncryptHelper.IsBadKey(_encryptKey, createIndexRequest.AuthKey, createIndexRequest.AppID))
+            if (EncryptHelper.IsBadKey(_llmEncryptKey, createIndexRequest.AuthKey, createIndexRequest.AppID))
             {
                 result.Message += $" Error : Failed QueryIndexAsync bad AuthKey for AppID {createIndexRequest.AppID}";
                 _logger.LogError(result.Message);
@@ -420,7 +420,7 @@ namespace NetworkMonitor.Search.Services
             }
             queryIndexRequest.Success = false;
 
-            if (EncryptHelper.IsBadKey(_encryptKey, queryIndexRequest.AuthKey, queryIndexRequest.AppID))
+            if (EncryptHelper.IsBadKey(_llmEncryptKey, queryIndexRequest.AuthKey, queryIndexRequest.AppID))
             {
                 //result.Success = false;
                 result.Message += $" Error : Failed QueryIndexAsync bad AuthKey for AppID {queryIndexRequest.AppID}";       
@@ -488,7 +488,8 @@ namespace NetworkMonitor.Search.Services
                     _cache.Set(cacheKey, queryResults);
                 }
                 queryIndexRequest.Message = result.Message;
-                await _rabbitRepo.PublishAsync<QueryIndexRequest>("queryIndexResult" + queryIndexRequest.AppID, queryIndexRequest, queryIndexRequest.RoutingKey);
+                if (string.IsNullOrEmpty(queryIndexRequest.RoutingKey))  await _rabbitRepo.PublishAsync<QueryIndexRequest>($"{queryIndexRequest.AppID}QueryIndexResult" , queryIndexRequest);
+                else await _rabbitRepo.PublishAsync<QueryIndexRequest>("queryIndexResult" + queryIndexRequest.AppID, queryIndexRequest, queryIndexRequest.RoutingKey);
                 result.Success = queryIndexRequest.Success;
                 result.Message += queryIndexRequest.Message;
             }
