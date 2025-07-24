@@ -424,6 +424,8 @@ namespace NetworkMonitor.Search.Services
             {
                 //result.Success = false;
                 result.Message += $" Error : Failed QueryIndexAsync bad AuthKey for AppID {queryIndexRequest.AppID}";
+                result.Message+=$" Key should be : {AesOperation.EncryptString(_encryptKey,queryIndexRequest.AppID)} . ";
+                       
                 _logger.LogError(result.Message);
                 return result;
             }
