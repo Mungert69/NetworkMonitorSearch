@@ -423,9 +423,7 @@ namespace NetworkMonitor.Search.Services
             if (EncryptHelper.IsBadKey(_encryptKey, queryIndexRequest.AuthKey, queryIndexRequest.AppID))
             {
                 //result.Success = false;
-                result.Message += $" Error : Failed QueryIndexAsync bad AuthKey for AppID {queryIndexRequest.AppID}";
-                result.Message+=$" Key should be : {AesOperation.EncryptString(_encryptKey,queryIndexRequest.AppID)} . ";
-                       
+                result.Message += $" Error : Failed QueryIndexAsync bad AuthKey for AppID {queryIndexRequest.AppID}";       
                 _logger.LogError(result.Message);
                 return result;
             }
