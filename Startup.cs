@@ -77,7 +77,12 @@ namespace NetworkMonitor.Search
 
           
 
-            services.AddSingleton<IFileRepo, FileRepo>();
+            services.AddSingleton<IFileRepo, FileRepo>(
+                 provider =>
+                 {
+                     return new FileRepo(false, "./state");
+                 }
+             );
             services.AddAsyncServiceInitialization()
                 .AddInitAction<IRabbitRepo>(async (rabbitRepo) =>
                     {
