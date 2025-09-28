@@ -75,7 +75,8 @@ namespace NetworkMonitor.Search.Services
             {
                 new MitreIndexingStrategy(),
                 new DocumentIndexingStrategy(),
-                new SecurityBookIndexingStrategy()
+                new SecurityBookIndexingStrategy(),
+                new QuantumBookIndexingStrategy()
             };
 
             _openSearchHelper = new OpenSearchHelper(_modelParams, embeddingGenerator, _strategies);

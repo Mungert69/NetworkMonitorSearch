@@ -15,6 +15,15 @@ namespace NetworkMonitor.Search.Services;
 /// All methods are **type‑agnostic** for OpenSearchHelper,
 /// but individual strategy classes know their concrete type.
 /// </summary>
+public interface IMultiVectorBook
+{
+    string Input { get; }
+    string Output { get; }
+    string Summary { get; }
+    List<float> InputEmbedding { get; set; }
+    List<float> OutputEmbedding { get; set; }
+    List<float> SummaryEmbedding { get; set; }
+}
 
 
 public interface IIndexingStrategy
@@ -234,15 +243,13 @@ public sealed class MitreIndexingStrategy : IndexingStrategyBase<Mitre>
   }}
 }}";
 }
-
-//  ------------------------------------------------------------------------------
-//  Strategy for 'SecurityBook'
-public sealed class SecurityBookIndexingStrategy : IndexingStrategyBase<SecurityBook>
+public abstract class MultiVectorBookIndexingStrategyBase<T> : IndexingStrategyBase<T>
+    where T : class, IMultiVectorBook, new()
 {
-    public override string IndexName => "securitybooks";
     public string ContentVectorFieldName => "output_embedding";
     public string QuestionVectorFieldName => "input_embedding";
     public string SummaryVectorFieldName => "summary_embedding";
+
     public override string GetVectorField(VectorSearchMode mode) => mode switch
     {
         VectorSearchMode.question => QuestionVectorFieldName,
@@ -260,44 +267,40 @@ public sealed class SecurityBookIndexingStrategy : IndexingStrategyBase<Security
 
     public override IEnumerable<string> GetFields(object item)
     {
-        if (item is SecurityBook book)
-            return new[] { book.Input, book.Output, book.Summary };
-        return Enumerable.Empty<string>();
+        var book = (T)item; // Strongly typed
+        return new[] { book.Input, book.Output, book.Summary };
     }
 
     public override async Task EnsureEmbeddingsAsync(object item, IEmbeddingGenerator generator, int padToTokens)
     {
-        var sb = (SecurityBook)item;
+        var book = (T)item;
 
         async Task Ensure(Func<List<float>> get, Action<List<float>> set, string sourceText)
         {
             if (get() is { Count: > 0 }) return;
-
             var emb = await generator.GenerateEmbeddingAsync(sourceText, padToTokens);
-            if (emb.Count == 0)
-                throw new InvalidOperationException($"Failed to generate embedding for '{sourceText}'.");
+            if (emb.Count == 0) throw new InvalidOperationException($"Failed to generate embedding for '{sourceText}'.");
             set(emb);
         }
 
-        await Ensure(() => sb.InputEmbedding, e => sb.InputEmbedding = e, sb.Input);
-        await Ensure(() => sb.OutputEmbedding, e => sb.OutputEmbedding = e, sb.Output);
-        await Ensure(() => sb.SummaryEmbedding, e => sb.SummaryEmbedding = e, sb.Summary);
+        await Ensure(() => book.InputEmbedding, e => book.InputEmbedding = e, book.Input);
+        await Ensure(() => book.OutputEmbedding, e => book.OutputEmbedding = e, book.Output);
+        await Ensure(() => book.SummaryEmbedding, e => book.SummaryEmbedding = e, book.Summary);
     }
 
-    public override string ComputeId(object item) =>
-        IdHelper.Sha256(((SecurityBook)item).Output);
+    public override string ComputeId(object item) => IdHelper.Sha256(((T)item).Output);
 
     public override object BuildIndexDocument(object item)
     {
-        var sb = (SecurityBook)item;
+        var book = (T)item;
         return new
         {
-            input = sb.Input,
-            output = sb.Output,
-            summary = sb.Summary,
-            input_embedding = sb.InputEmbedding,
-            output_embedding = sb.OutputEmbedding,
-            summary_embedding = sb.SummaryEmbedding
+            input = book.Input,
+            output = book.Output,
+            summary = book.Summary,
+            input_embedding = book.InputEmbedding,
+            output_embedding = book.OutputEmbedding,
+            summary_embedding = book.SummaryEmbedding
         };
     }
 
@@ -320,6 +323,16 @@ public sealed class SecurityBookIndexingStrategy : IndexingStrategyBase<Security
 }}";
 }
 
+public sealed class SecurityBookIndexingStrategy : MultiVectorBookIndexingStrategyBase<SecurityBook>
+{
+    public override string IndexName => "securitybooks";
+}
+
+public sealed class QuantumBookIndexingStrategy : MultiVectorBookIndexingStrategyBase<QuantumBook>
+{
+    public override string IndexName => "quantumbooks";
+}
+
 public class Document
 {
     public string Input { get; set; } = "";
@@ -327,14 +340,24 @@ public class Document
     public List<float> InputEmbedding { get; set; } = new();
     public List<float> OutputEmbedding { get; set; } = new();
 }
+
 public class Mitre
 {
     public string Input { get; set; } = "";
     public string Output { get; set; } = "";
     public List<float> Embedding { get; set; } = new();
 }
+public class SecurityBook : IMultiVectorBook
+{
+    public string Input { get; set; } = "";
+    public string Output { get; set; } = "";
+    public string Summary { get; set; } = "";
+    public List<float> InputEmbedding { get; set; } = new();
+    public List<float> OutputEmbedding { get; set; } = new();
+    public List<float> SummaryEmbedding { get; set; } = new();
+}
 
-public class SecurityBook
+public class QuantumBook : IMultiVectorBook
 {
     public string Input { get; set; } = "";
     public string Output { get; set; } = "";
