@@ -472,6 +472,11 @@ namespace NetworkMonitor.Search.Services
 
                         if (searchResponse != null)
                         {
+                            int hitCount = searchResponse.Hits?.HitsList?.Count ?? 0;
+                            float maxScore = searchResponse.Hits?.MaxScore ?? 0;
+                            int took = searchResponse.Took;
+                            bool timedOut = searchResponse.TimedOut;
+
                             foreach (var hit in searchResponse.Hits.HitsList)
                             {
                                 queryResults.Add(new QueryResultObj
@@ -481,7 +486,8 @@ namespace NetworkMonitor.Search.Services
                                 });
                             }
                             queryIndexRequest.Success = true;
-                            result.Message += $"Query executed successfully on index '{queryIndexRequest.IndexName}'.";
+                            result.Message += $"Query executed successfully on index '{queryIndexRequest.IndexName}'. ";
+                            result.Message += $"Hits: {hitCount}, MaxScore: {maxScore}, Took: {took}ms, TimedOut: {timedOut}.";
                         }
                     }
                     queryIndexRequest.QueryResults = queryResults;

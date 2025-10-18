@@ -162,8 +162,8 @@ public class OpenSearchHelper
         if (response.IsSuccessStatusCode)
         {
             var responseBody = await response.Content.ReadAsStringAsync();
-            Console.WriteLine("Search Results:");
-            Console.WriteLine(responseBody);
+            // Console.WriteLine("Search Results:");
+            // Console.WriteLine(responseBody);
 
             // Deserialize the JSON response into the SearchResponse object
             searchResponse = JsonConvert.DeserializeObject<SearchResponseObj>(responseBody);
