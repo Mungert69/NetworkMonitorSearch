@@ -4,6 +4,7 @@ using Newtonsoft.Json;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Threading;
+using System.Net.Http;
 using Microsoft.Extensions.Logging;
 using NetworkMonitor.Objects;
 using NetworkMonitor.Objects.Repository;
@@ -543,14 +544,38 @@ namespace NetworkMonitor.Search.Services
             {
                 result.Success = false;
                 var targetUri = _openSearchHelper.SearchUri;
-                result.Message += $"Error: Failed to query index '{queryIndexRequest.IndexName}' on '{targetUri}'. Exception: {ex.Message}";
+                var failureStage = DescribeFailureStage(ex);
+                result.Message += $"Error during {failureStage} for index '{queryIndexRequest.IndexName}' targeting '{targetUri}': {ex.GetType().Name}: {ex.Message}";
                 _logger.LogError(ex,
-                    "MessageAPI: QueryIndexAsync: error querying index {IndexName} at {Uri}",
+                    "MessageAPI: QueryIndexAsync: error during {Stage} for index {IndexName} at {Uri}",
+                    failureStage,
                     queryIndexRequest.IndexName,
                     targetUri);
             }
 
             return result;
+        }
+
+        private static string DescribeFailureStage(Exception ex)
+        {
+            if (ex is InvalidOperationException inv &&
+                inv.Message.Contains("Embedding provider", StringComparison.OrdinalIgnoreCase))
+                return "embedding provider request";
+
+            if (ex is TimeoutException timeout &&
+                timeout.Message.Contains("Embedding", StringComparison.OrdinalIgnoreCase))
+                return "embedding provider timeout";
+
+            if (ex is TaskCanceledException)
+                return "HTTP request timeout";
+
+            if (ex is HttpRequestException)
+                return "HTTP request to external service";
+
+            if (ex.InnerException != null)
+                return DescribeFailureStage(ex.InnerException);
+
+            return ex.GetType().Name;
         }
 
 

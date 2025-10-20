@@ -42,34 +42,52 @@ public class NovitaEmbeddingGenerator : IEmbeddingGenerator
             return _tokenizer.Decode(ids.Take(cap).ToList());
         }
 
+        Exception? lastException = null;
         for (int attempt = 0; attempt < 10; attempt++)
         {
             await _rateLimiter.WaitAsync();
 
-            var result = await _client.GetEmbeddingAsync(
-                _mlParams.LlmHFKey,
-                _mlParams.EmbeddingApiModel,
-                _mlParams.EmbeddingApiUrl,
-                Truncate(text, maxCap)
-            );
-            if (!string.IsNullOrEmpty(result.error))
+            try
             {
-                if (result.error.Contains("maximum context length", StringComparison.OrdinalIgnoreCase))
-                {
-                    maxCap = Math.Max(500, maxCap - 500);
-                    _logger.LogDebug("Truncated input to {TokenCount} tokens", maxCap);
-                    continue;
-                }
-                _rateLimiter.NotifyFailure(result.rateLimited);
-                return new List<float>();
-            }
+                var result = await _client.GetEmbeddingAsync(
+                    _mlParams.LlmHFKey,
+                    _mlParams.EmbeddingApiModel,
+                    _mlParams.EmbeddingApiUrl,
+                    Truncate(text, maxCap)
+                );
 
-            _rateLimiter.NotifySuccess();
-            return result.embedding;
+                if (!string.IsNullOrEmpty(result.error))
+                {
+                    if (result.error.Contains("maximum context length", StringComparison.OrdinalIgnoreCase))
+                    {
+                        maxCap = Math.Max(500, maxCap - 500);
+                        _logger.LogDebug("Truncated input to {TokenCount} tokens", maxCap);
+                        continue;
+                    }
+
+                    _rateLimiter.NotifyFailure(result.rateLimited);
+                    throw new InvalidOperationException($"Embedding provider returned error: {result.error}");
+                }
+
+                _rateLimiter.NotifySuccess();
+                if (result.embedding == null || result.embedding.Count == 0)
+                    throw new InvalidOperationException("Embedding provider returned an empty embedding vector.");
+                return result.embedding;
+            }
+            catch (TaskCanceledException ex)
+            {
+                lastException = new TimeoutException("Embedding provider request timed out.", ex);
+                _rateLimiter.NotifyFailure(true);
+            }
+            catch (HttpRequestException ex)
+            {
+                lastException = ex;
+                _rateLimiter.NotifyFailure(true);
+            }
         }
 
-        _logger.LogError("All retry attempts failed for embedding generation");
-        return new List<float>();
+        _logger.LogError(lastException, "All retry attempts failed for embedding generation");
+        throw lastException ?? new TimeoutException("Embedding provider request failed after multiple retries.");
     }
 }
 
