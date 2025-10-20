@@ -11,6 +11,7 @@ public class OSModelParams{
     private string _embeddingModelDir;
     private int _embeddingModelVecDim=128;
     private string _defaultIndex;
+    private TimeSpan _httpTimeout = TimeSpan.FromSeconds(100);
 
     public Uri SearchUri  => new Uri(_url);
 
@@ -20,4 +21,5 @@ public class OSModelParams{
     public string User { get => _user; set => _user = value; }
     public string DefaultIndex { get => _defaultIndex; set => _defaultIndex = value; }
     public int EmbeddingModelVecDim { get => _embeddingModelVecDim; set => _embeddingModelVecDim = value; }
+    public TimeSpan HttpTimeout { get => _httpTimeout; set => _httpTimeout = value; }
 }

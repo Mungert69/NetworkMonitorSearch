@@ -3,6 +3,7 @@ using System.IO;
 using Newtonsoft.Json;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using System.Threading;
 using Microsoft.Extensions.Logging;
 using NetworkMonitor.Objects;
 using NetworkMonitor.Objects.Repository;
@@ -60,7 +61,10 @@ namespace NetworkMonitor.Search.Services
                 User = mlParams.OpenSearchUser,
                 Key = mlParams.OpenSearchKey,
                 Url = mlParams.OpenSearchUrl,
-                DefaultIndex = mlParams.OpenSearchDefaultIndex
+                DefaultIndex = mlParams.OpenSearchDefaultIndex,
+                HttpTimeout = mlParams.OpenSearchHttpTimeoutSeconds > 0
+                    ? TimeSpan.FromSeconds(mlParams.OpenSearchHttpTimeoutSeconds)
+                    : Timeout.InfiniteTimeSpan
                 // Add any other properties that need to be mapped
             };
             _llmThreads = mlParams.LlmThreads;
@@ -69,6 +73,18 @@ namespace NetworkMonitor.Search.Services
             
             _dataDir = systemParams.DataDir;
             _llmEncryptKey = systemParams.LLMEncryptKey;
+
+            if (mlParams.OpenSearchIndexTimeoutSeconds != null)
+            {
+                foreach (var kvp in mlParams.OpenSearchIndexTimeoutSeconds)
+                {
+                    if (string.IsNullOrWhiteSpace(kvp.Key))
+                        continue;
+                    _indexQueryTimeouts[kvp.Key] = kvp.Value > 0
+                        ? TimeSpan.FromSeconds(kvp.Value)
+                        : Timeout.InfiniteTimeSpan;
+                }
+            }
 
 
             _strategies = new IIndexingStrategy[]
@@ -183,6 +199,7 @@ namespace NetworkMonitor.Search.Services
 
         // Store padToTokens per index
         private readonly Dictionary<string, int> _indexMaxTokens = new();
+        private readonly Dictionary<string, TimeSpan> _indexQueryTimeouts = new(StringComparer.OrdinalIgnoreCase);
 
 
 
@@ -219,6 +236,17 @@ namespace NetworkMonitor.Search.Services
                 return (loaded, actual);
             }
             return (null, null);
+        }
+
+        private TimeSpan? ResolveQueryTimeout(string indexName)
+        {
+            if (!string.IsNullOrWhiteSpace(indexName) &&
+                _indexQueryTimeouts.TryGetValue(indexName, out var overrideTimeout))
+            {
+                return overrideTimeout == Timeout.InfiniteTimeSpan ? (TimeSpan?)null : overrideTimeout;
+            }
+
+            return _modelParams.HttpTimeout == Timeout.InfiniteTimeSpan ? (TimeSpan?)null : _modelParams.HttpTimeout;
         }
 
 
@@ -467,8 +495,19 @@ namespace NetworkMonitor.Search.Services
                         var (padToTokens, _) = LoadIndexMaxTokens(queryIndexRequest.IndexName);
                         int useMaxTokens = padToTokens ?? _minTokenLengthCap;
 
+                        var targetUri = _openSearchHelper.SearchUri;
+                        _logger.LogInformation(
+                            "MessageAPI: QueryIndexAsync: connecting to OpenSearch at {Uri} for index {IndexName}",
+                            targetUri,
+                            queryIndexRequest.IndexName);
+                        result.Message += $"Attempting OpenSearch query on '{targetUri}' for index '{queryIndexRequest.IndexName}'. ";
 
-                        var searchResponse = await _openSearchHelper.SearchDocumentsAsync(queryIndexRequest.QueryText, queryIndexRequest.IndexName, useMaxTokens, queryIndexRequest.VectorSearchMode);
+                        var searchResponse = await _openSearchHelper.SearchDocumentsAsync(
+                            queryIndexRequest.QueryText,
+                            queryIndexRequest.IndexName,
+                            useMaxTokens,
+                            queryIndexRequest.VectorSearchMode,
+                            ResolveQueryTimeout(queryIndexRequest.IndexName));
 
                         if (searchResponse != null)
                         {
@@ -503,7 +542,12 @@ namespace NetworkMonitor.Search.Services
             catch (Exception ex)
             {
                 result.Success = false;
-                result.Message += $"Error: Failed to query index '{queryIndexRequest.IndexName}'. Exception: {ex.Message}";
+                var targetUri = _openSearchHelper.SearchUri;
+                result.Message += $"Error: Failed to query index '{queryIndexRequest.IndexName}' on '{targetUri}'. Exception: {ex.Message}";
+                _logger.LogError(ex,
+                    "MessageAPI: QueryIndexAsync: error querying index {IndexName} at {Uri}",
+                    queryIndexRequest.IndexName,
+                    targetUri);
             }
 
             return result;

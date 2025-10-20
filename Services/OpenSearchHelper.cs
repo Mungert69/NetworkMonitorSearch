@@ -11,6 +11,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using OpenSearch.Net;
 using NetworkMonitor.Objects;
+using System.Threading;
 
 namespace NetworkMonitor.Search.Services;
 
@@ -21,6 +22,9 @@ public class OpenSearchHelper
     private IEmbeddingGenerator _embeddingGenerator;
     private OSModelParams _modelParams;
     private readonly IReadOnlyList<IIndexingStrategy> _strategies;
+    private readonly HttpClient _httpClient;
+
+    public Uri SearchUri => _modelParams.SearchUri;
 
     public OpenSearchHelper(OSModelParams modelParams,
                               IEmbeddingGenerator embeddingGenerator,
@@ -38,6 +42,21 @@ public class OpenSearchHelper
             .ServerCertificateValidationCallback((o, certificate, chain, errors) => true);
 
         _client = new OpenSearchClient(settings);
+
+        var handler = new HttpClientHandler
+        {
+            ServerCertificateCustomValidationCallback = (message, cert, chain, sslPolicyErrors) => true
+        };
+
+        _httpClient = new HttpClient(handler, disposeHandler: true)
+        {
+            BaseAddress = _modelParams.SearchUri,
+            Timeout = Timeout.InfiniteTimeSpan
+        };
+
+        var authBytes = Encoding.ASCII.GetBytes($"{_modelParams.User}:{_modelParams.Key}");
+        _httpClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Basic", Convert.ToBase64String(authBytes));
     }
 
     // Method to generate embeddings for a document (async)
@@ -108,7 +127,13 @@ public class OpenSearchHelper
 
     // Method to search for similar documents using precomputed embeddings
     // Accepts an optional vectorFieldName parameter to support different field names per index/object.
-    public async Task<SearchResponseObj> SearchDocumentsAsync(string queryText, string indexName, int padToTokens, VectorSearchMode mode = VectorSearchMode.content)
+    public async Task<SearchResponseObj> SearchDocumentsAsync(
+        string queryText,
+        string indexName,
+        int padToTokens,
+        VectorSearchMode mode = VectorSearchMode.content,
+        TimeSpan? requestTimeout = null,
+        CancellationToken cancellationToken = default)
     {
 
         var queryEmbedding = await GenerateEmbeddingAsync(queryText, padToTokens);
@@ -118,18 +143,6 @@ public class OpenSearchHelper
         {
             throw new Exception("Failed to generate query embedding.");
         }
-
-        // Create an HttpClient instance for sending the request
-        var handler = new HttpClientHandler
-        {
-            ServerCertificateCustomValidationCallback = (message, cert, chain, sslPolicyErrors) => true
-        };
-
-        using var httpClient = new HttpClient(handler)
-        {
-            BaseAddress = _modelParams.SearchUri
-        };
-        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes($"{_modelParams.User}:{_modelParams.Key}")));
 
         var strategy = StrategyForIndex(indexName);
         string vectorFieldName = strategy.GetVectorField(mode);
@@ -153,10 +166,10 @@ public class OpenSearchHelper
 
         // Serialize the request body to JSON using Newtonsoft.Json
         var jsonContent = JsonConvert.SerializeObject(requestBody);
-        var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+        using var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
         // Send the POST request to the specified index
-        var response = await httpClient.PostAsync($"/{indexName}/_search", content);
+        var response = await PostWithTimeoutAsync($"/{indexName}/_search", content, requestTimeout, cancellationToken);
 
         // Process the response
         if (response.IsSuccessStatusCode)
@@ -182,7 +195,9 @@ public class OpenSearchHelper
         int kPerField,
         Dictionary<string, float>? fieldWeights,
         string indexName,
-        int padToTokens)
+        int padToTokens,
+        TimeSpan? requestTimeout = null,
+        CancellationToken cancellationToken = default)
     {
 
         var queryEmbedding = await GenerateEmbeddingAsync(queryText, padToTokens);
@@ -227,26 +242,39 @@ public class OpenSearchHelper
         };
 
         var json = JsonConvert.SerializeObject(requestBody);
-        using var client = new HttpClient(new HttpClientHandler
-        {
-            ServerCertificateCustomValidationCallback = (m, c, ch, e) => true
-        })
-        {
-            BaseAddress = _modelParams.SearchUri
-        };
-        client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Basic", Convert.ToBase64String(
-                Encoding.ASCII.GetBytes($"{_modelParams.User}:{_modelParams.Key}")));
+        using var requestContent = new StringContent(json, Encoding.UTF8, "application/json");
 
-        var response = await client.PostAsync($"/{indexName}/_search",
-            new StringContent(json, Encoding.UTF8, "application/json"));
+        var response = await PostWithTimeoutAsync($"/{indexName}/_search", requestContent, requestTimeout, cancellationToken);
 
         if (!response.IsSuccessStatusCode)
             throw new Exception($"Search failed: {response.ReasonPhrase}");
 
-        var content = await response.Content.ReadAsStringAsync();
-        return JsonConvert.DeserializeObject<SearchResponseObj>(content) ??
+        var responseBody = await response.Content.ReadAsStringAsync();
+        return JsonConvert.DeserializeObject<SearchResponseObj>(responseBody) ??
                new SearchResponseObj();
+    }
+
+    private async Task<HttpResponseMessage> PostWithTimeoutAsync(
+        string requestUri,
+        HttpContent content,
+        TimeSpan? requestTimeout,
+        CancellationToken cancellationToken)
+    {
+        if (requestTimeout.HasValue)
+        {
+            var timeout = requestTimeout.Value;
+            if (timeout != Timeout.InfiniteTimeSpan && timeout > TimeSpan.Zero)
+            {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                cts.CancelAfter(timeout);
+                return await _httpClient.PostAsync(requestUri, content, cts.Token);
+            }
+        }
+
+        if (cancellationToken.CanBeCanceled)
+            return await _httpClient.PostAsync(requestUri, content, cancellationToken);
+
+        return await _httpClient.PostAsync(requestUri, content);
     }
 
     public async Task<ResultObj> EnsureIndexExistsAsync(
