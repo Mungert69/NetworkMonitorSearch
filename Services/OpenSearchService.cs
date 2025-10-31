@@ -338,7 +338,10 @@ namespace NetworkMonitor.Search.Services
                 createIndexRequest.Success = resultEn.Success && resultIn.Success;
                 createIndexRequest.Message += resultEn.Message + resultIn.Message;
 
-                await _rabbitRepo.PublishAsync("createIndexResult" + createIndexRequest.AppID, createIndexRequest);
+                var responseExchange = string.IsNullOrWhiteSpace(createIndexRequest.ResponseExchange)
+                    ? "createIndexResult" + createIndexRequest.AppID
+                    : createIndexRequest.ResponseExchange;
+                await _rabbitRepo.PublishAsync(responseExchange, createIndexRequest);
 
                 result.Success = createIndexRequest.Success;
                 result.Message += createIndexRequest.Message;
@@ -424,7 +427,8 @@ namespace NetworkMonitor.Search.Services
                         AuthKey = createIndexRequest.AuthKey,
                         RecreateIndex = (i == 0), // Only recreate for the first file
                         JsonMapping = "",
-                        MessageID = createIndexRequest.MessageID
+                        MessageID = createIndexRequest.MessageID,
+                        ResponseExchange = createIndexRequest.ResponseExchange
                     };
 
                     var createResult = await CreateIndexAsync(req, padToTokens);
