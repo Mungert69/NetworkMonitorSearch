@@ -590,8 +590,18 @@ namespace NetworkMonitor.Search.Services
                     _cache.Set(cacheKey, queryResults);
                 }
                 queryIndexRequest.Message = result.Message;
-                if (string.IsNullOrEmpty(queryIndexRequest.RoutingKey))  await _rabbitRepo.PublishAsync<QueryIndexRequest>($"{queryIndexRequest.AppID}QueryIndexResult" , queryIndexRequest);
-                else await _rabbitRepo.PublishAsync<QueryIndexRequest>("queryIndexResult" + queryIndexRequest.AppID, queryIndexRequest, queryIndexRequest.RoutingKey);
+                var responseExchange = string.IsNullOrWhiteSpace(queryIndexRequest.ResponseExchange)
+                    ? $"{queryIndexRequest.AppID}QueryIndexResult"
+                    : queryIndexRequest.ResponseExchange;
+
+                if (string.IsNullOrEmpty(queryIndexRequest.RoutingKey))
+                {
+                    await _rabbitRepo.PublishAsync<QueryIndexRequest>(responseExchange, queryIndexRequest);
+                }
+                else
+                {
+                    await _rabbitRepo.PublishAsync<QueryIndexRequest>(responseExchange, queryIndexRequest, queryIndexRequest.RoutingKey);
+                }
                 result.Success = queryIndexRequest.Success;
                 result.Message += queryIndexRequest.Message;
             }
