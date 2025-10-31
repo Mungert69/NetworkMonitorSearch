@@ -42,6 +42,9 @@ public interface IIndexingStrategy
     // Token estimation
     IEnumerable<string> GetFields(object item);
     (int padToTokens, int actualMax) EstimatePadding(IEnumerable<string> jsonFiles, string embeddingModelDir, int maxCap, int minCap);
+
+    // New: Map a search hit to a QueryResultObj
+    QueryResultObj MapSearchHitToResult(NetworkMonitor.Objects.Hit hit);
 }
 
 /// <summary>
@@ -94,6 +97,40 @@ public abstract class IndexingStrategyBase<T> : IIndexingStrategy where T : clas
             }
         }
         return (pad, maxSeen);
+    }
+
+    // Default implementation: for indices with input/output fields
+    public virtual QueryResultObj MapSearchHitToResult(NetworkMonitor.Objects.Hit hit)
+    {
+        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrWhiteSpace(hit.Index))
+            metadata["index"] = hit.Index;
+
+        if (hit.Source?.ExtensionData != null)
+        {
+            foreach (var kvp in hit.Source.ExtensionData)
+            {
+                if (kvp.Key.EndsWith("_embedding", StringComparison.OrdinalIgnoreCase)) continue;
+                if (kvp.Key.Equals("content", StringComparison.OrdinalIgnoreCase)) continue;
+                var value = kvp.Value;
+                metadata[kvp.Key] = value?.ToString() ?? string.Empty;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(hit.Source?.Input))
+            metadata.TryAdd("title", hit.Source.Input);
+
+        if (!metadata.ContainsKey("summary") && hit.Source?.Output != null)
+            metadata["summary"] = hit.Source.Output;
+
+        return new QueryResultObj
+        {
+            Input = hit.Source?.Input ?? string.Empty,
+            Output = hit.Source?.Output ?? string.Empty,
+            Score = hit.Score,
+            Metadata = metadata
+        };
     }
 }
 
@@ -493,4 +530,39 @@ public sealed class BlogIndexingStrategy : IndexingStrategyBase<BlogIndexDocumen
     }}
   }}
 }}";
+
+    // Blog-specific mapping for search results
+    public override QueryResultObj MapSearchHitToResult(NetworkMonitor.Objects.Hit hit)
+    {
+        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrWhiteSpace(hit.Index))
+            metadata["index"] = hit.Index;
+
+        var ext = hit.Source?.ExtensionData;
+        string input = ext != null && ext.TryGetValue("title", out var titleToken) ? titleToken?.ToString() : string.Empty;
+        string output = ext != null && ext.TryGetValue("summary", out var summaryToken) ? summaryToken?.ToString() : string.Empty;
+
+        // Optionally, fallback to content if summary is empty
+        if (string.IsNullOrWhiteSpace(output) && ext != null && ext.TryGetValue("content", out var contentToken))
+            output = contentToken?.ToString();
+
+        // Add all other fields to metadata
+        if (ext != null)
+        {
+            foreach (var kvp in ext)
+            {
+                if (kvp.Key.EndsWith("_embedding", StringComparison.OrdinalIgnoreCase)) continue;
+                metadata[kvp.Key] = kvp.Value?.ToString() ?? string.Empty;
+            }
+        }
+
+        return new QueryResultObj
+        {
+            Input = input ?? string.Empty,
+            Output = output ?? string.Empty,
+            Score = hit.Score,
+            Metadata = metadata
+        };
+    }
 }
