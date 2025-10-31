@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Threading;
@@ -93,7 +94,8 @@ namespace NetworkMonitor.Search.Services
                 new MitreIndexingStrategy(),
                 new DocumentIndexingStrategy(),
                 new SecurityBookIndexingStrategy(),
-                new QuantumBookIndexingStrategy()
+                new QuantumBookIndexingStrategy(),
+                new BlogIndexingStrategy()
             };
 
             _openSearchHelper = new OpenSearchHelper(_modelParams, embeddingGenerator, _strategies);
@@ -107,7 +109,7 @@ namespace NetworkMonitor.Search.Services
         }
 
         // Create a snapshot for the given indices
-        public async Task<ResultObj> CreateSnapshotAsync(string snapshotRepo, string snapshotName, string indices = "documents,mitre,securitybooks")
+        public async Task<ResultObj> CreateSnapshotAsync(string snapshotRepo, string snapshotName, string indices = "documents,mitre,securitybooks,blogs")
         {
             var result = new ResultObj();
             try
@@ -519,10 +521,63 @@ namespace NetworkMonitor.Search.Services
 
                             foreach (var hit in searchResponse.Hits.HitsList)
                             {
+                                var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+                                if (!string.IsNullOrWhiteSpace(hit.Index))
+                                {
+                                    metadata["index"] = hit.Index;
+                                }
+
+                                if (hit.Source?.ExtensionData != null)
+                                {
+                                    foreach (var kvp in hit.Source.ExtensionData)
+                                    {
+                                        if (kvp.Key.EndsWith("_embedding", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            continue;
+                                        }
+
+                                        if (kvp.Key.Equals("content", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            continue;
+                                        }
+
+                                        var value = kvp.Value;
+                                        switch (value?.Type)
+                                        {
+                                            case JTokenType.Array:
+                                                metadata[kvp.Key] = value.ToString(Formatting.None);
+                                                break;
+                                            case JTokenType.Object:
+                                                metadata[kvp.Key] = value.ToString(Formatting.None);
+                                                break;
+                                            case JTokenType.Null:
+                                                metadata[kvp.Key] = string.Empty;
+                                                break;
+                                            default:
+                                                metadata[kvp.Key] = value?.ToString() ?? string.Empty;
+                                                break;
+                                        }
+                                    }
+                                }
+
+                                // Preserve the canonical title/summary when present.
+                                if (!string.IsNullOrWhiteSpace(hit.Source?.Input))
+                                {
+                                    metadata.TryAdd("title", hit.Source.Input);
+                                }
+
+                                if (!metadata.ContainsKey("summary") && hit.Source?.Output != null)
+                                {
+                                    metadata["summary"] = hit.Source.Output;
+                                }
+
                                 queryResults.Add(new QueryResultObj
                                 {
-                                    Input = hit.Source.Input,
-                                    Output = hit.Source.Output
+                                    Input = hit.Source?.Input ?? string.Empty,
+                                    Output = hit.Source?.Output ?? string.Empty,
+                                    Score = hit.Score,
+                                    Metadata = metadata
                                 });
                             }
                             queryIndexRequest.Success = true;

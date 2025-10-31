@@ -366,3 +366,131 @@ public class QuantumBook : IMultiVectorBook
     public List<float> OutputEmbedding { get; set; } = new();
     public List<float> SummaryEmbedding { get; set; } = new();
 }
+
+public sealed class BlogIndexingStrategy : IndexingStrategyBase<BlogIndexDocument>
+{
+    private const string TitleVectorFieldName = "title_embedding";
+    private const string ContentVectorFieldName = "content_embedding";
+
+    public override string IndexName => "blogs";
+
+    public override string GetVectorField(VectorSearchMode mode) =>
+        mode switch
+        {
+            VectorSearchMode.question => TitleVectorFieldName,
+            _ => ContentVectorFieldName
+        };
+
+    public override IReadOnlyDictionary<string, float> GetDefaultFieldWeights() =>
+        new Dictionary<string, float>
+        {
+            [TitleVectorFieldName] = 0.8f,
+            [ContentVectorFieldName] = 1f
+        };
+
+    public override IEnumerable<string> GetFields(object item)
+    {
+        if (item is BlogIndexDocument blog)
+        {
+            return new[]
+            {
+                blog.Title,
+                blog.Summary,
+                blog.Content
+            };
+        }
+
+        return Array.Empty<string>();
+    }
+
+    public override async Task EnsureEmbeddingsAsync(object item, IEmbeddingGenerator generator, int padToTokens)
+    {
+        if (item is not BlogIndexDocument blog)
+        {
+            throw new InvalidOperationException("BlogIndexingStrategy encountered unexpected item type.");
+        }
+
+        async Task EnsureAsync(Func<List<float>> get, Action<List<float>> set, string sourceText)
+        {
+            if (get() is { Count: > 0 }) return;
+            if (string.IsNullOrWhiteSpace(sourceText))
+            {
+                set(new List<float>());
+                return;
+            }
+
+            var embedding = await generator.GenerateEmbeddingAsync(sourceText, padToTokens);
+            if (embedding.Count == 0)
+            {
+                throw new InvalidOperationException("Failed to generate embedding for blog content.");
+            }
+            set(embedding);
+        }
+
+        await EnsureAsync(() => blog.TitleEmbedding, e => blog.TitleEmbedding = e, blog.Title);
+        var contentSource = !string.IsNullOrWhiteSpace(blog.Content) ? blog.Content : blog.Summary;
+        await EnsureAsync(() => blog.ContentEmbedding, e => blog.ContentEmbedding = e, contentSource ?? blog.Title);
+    }
+
+    public override string ComputeId(object item)
+    {
+        var blog = (BlogIndexDocument)item;
+        if (!string.IsNullOrWhiteSpace(blog.Slug))
+        {
+            return blog.Slug.ToLowerInvariant();
+        }
+
+        return IdHelper.Sha256($"{blog.Title}:{blog.Url}");
+    }
+
+    public override object BuildIndexDocument(object item)
+    {
+        var blog = (BlogIndexDocument)item;
+        return new
+        {
+            title = blog.Title,
+            slug = blog.Slug,
+            summary = blog.Summary,
+            content = blog.Content,
+            categories = blog.Categories ?? new List<string>(),
+            url = blog.Url,
+            image = blog.Image,
+            author = blog.Author,
+            published_at = blog.PublishedAt,
+            title_embedding = blog.TitleEmbedding ?? new List<float>(),
+            content_embedding = blog.ContentEmbedding ?? new List<float>()
+        };
+    }
+
+    public override string GetIndexMapping(int dim) => $@"
+{{
+  ""settings"": {{
+    ""index"": {{
+      ""knn"": true
+    }}
+  }},
+  ""mappings"": {{
+    ""properties"": {{
+      ""title"": {{ ""type"": ""text"" }},
+      ""slug"": {{ ""type"": ""keyword"" }},
+      ""summary"": {{ ""type"": ""text"" }},
+      ""content"": {{ ""type"": ""text"" }},
+      ""categories"": {{ ""type"": ""keyword"" }},
+      ""url"": {{ ""type"": ""keyword"" }},
+      ""image"": {{ ""type"": ""keyword"" }},
+      ""author"": {{ ""type"": ""keyword"" }},
+      ""published_at"": {{ ""type"": ""date"", ""ignore_malformed"": true }},
+      ""title_embedding"": {{
+        ""type"": ""knn_vector"",
+        ""dimension"": {dim},
+        ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }}
+      }},
+      ""content_embedding"": {{
+        ""type"": ""knn_vector"",
+        ""dimension"": {dim},
+        ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }}
+      }}
+    }}
+  }}
+}}";
+}

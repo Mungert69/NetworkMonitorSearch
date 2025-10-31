@@ -1,4 +1,6 @@
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using System;
 using System.Collections.Generic;
 
 namespace NetworkMonitor.Objects
@@ -43,7 +45,7 @@ namespace NetworkMonitor.Objects
         public float MaxScore { get; set; }
 
         [JsonProperty("hits")]
-        public List<Hit> HitsList { get; set; }
+        public List<Hit> HitsList { get; set; } = new();
     }
 
     public class Total
@@ -78,7 +80,7 @@ namespace NetworkMonitor.Objects
         [JsonProperty("output")]
         public string Output { get; set; } = "";
 
-        [JsonProperty("embedding")]
-        public List<float> Embedding { get; set; }
+        [JsonExtensionData]
+        public IDictionary<string, JToken> ExtensionData { get; set; } = new Dictionary<string, JToken>(StringComparer.OrdinalIgnoreCase);
     }
 }
