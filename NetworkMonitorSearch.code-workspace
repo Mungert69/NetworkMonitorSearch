@@ -8,12 +8,6 @@
 		},
 		{
 			"path": "../NetworkMonitorLib"
-		},
-		{
-			"path": "../FreeNetworkMonitorBlog"
-		},
-		{
-			"path": "../NetworkMonitorService"
 		}
 	],
 	"settings": {}

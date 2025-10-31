@@ -331,10 +331,26 @@ namespace NetworkMonitor.Search.Services
 
                 Console.WriteLine($"Deserialization for index '{createIndexRequest.IndexName}' succeeded. Indexing with {padToTokens} tokens.");
 
+                if (createIndexRequest.IncrementalUpdate)
+                {
+                    Console.WriteLine($"Incremental mode: retaining index '{createIndexRequest.IndexName}' and updating changed documents only.");
+                    result.Message += $"Mode=incremental update for '{createIndexRequest.IndexName}'. ";
+                }
+                else if (createIndexRequest.RecreateIndex)
+                {
+                    Console.WriteLine($"Full rebuild mode: index '{createIndexRequest.IndexName}' will be deleted and recreated.");
+                    result.Message += $"Mode=full rebuild for '{createIndexRequest.IndexName}'. ";
+                }
+                else
+                {
+                    Console.WriteLine($"Append mode: indexing new documents into '{createIndexRequest.IndexName}'.");
+                    result.Message += $"Mode=append for '{createIndexRequest.IndexName}'. ";
+                }
+
                 var resultEn = await _openSearchHelper.EnsureIndexExistsAsync(indexName: createIndexRequest.IndexName, recreateIndex: createIndexRequest.RecreateIndex);
                 if (!resultEn.Success) return resultEn;
 
-                var resultIn = await _openSearchHelper.IndexDocumentsAsync(items, padToTokens);
+                var resultIn = await _openSearchHelper.IndexDocumentsAsync(items, padToTokens, createIndexRequest.IncrementalUpdate);
                 createIndexRequest.Success = resultEn.Success && resultIn.Success;
                 createIndexRequest.Message += resultEn.Message + resultIn.Message;
 
@@ -428,7 +444,8 @@ namespace NetworkMonitor.Search.Services
                         RecreateIndex = (i == 0), // Only recreate for the first file
                         JsonMapping = "",
                         MessageID = createIndexRequest.MessageID,
-                        ResponseExchange = createIndexRequest.ResponseExchange
+                        ResponseExchange = createIndexRequest.ResponseExchange,
+                        IncrementalUpdate = createIndexRequest.IncrementalUpdate
                     };
 
                     var createResult = await CreateIndexAsync(req, padToTokens);

@@ -1,5 +1,6 @@
 using OpenSearch.Client;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -67,10 +68,15 @@ public class OpenSearchHelper
 
     // Method to load documents or securitybooks from JSON and index in OpenSearch
     public async Task<ResultObj> IndexDocumentsAsync(IEnumerable<object> items,
-                                                     int padToTokens)
+                                                     int padToTokens,
+                                                     bool incrementalUpdate = false)
     {
         var result = new ResultObj { Message = "IndexDocumentsAsync: " };
         bool failed = false;
+        int created = 0;
+        int updated = 0;
+        int skipped = 0;
+        string? lastIndexName = null;
 
         foreach (var item in items)
         {
@@ -85,29 +91,90 @@ public class OpenSearchHelper
 
             try
             {
-                await strategy.EnsureEmbeddingsAsync(item, _embeddingGenerator, padToTokens);
-
                 var id = strategy.ComputeId(item);
                 var index = strategy.IndexName;
-                var exists = await _client.DocumentExistsAsync<object>(id, idx => idx.Index(index));
+                var contentHash = strategy.ComputeContentHash(item);
+                bool exists = false;
+                string? existingHash = null;
+                lastIndexName = index;
 
-                if (exists.Exists)
+                if (incrementalUpdate)
                 {
-                    result.Message += $"{index}/{id} already exists. Skipping. ";
-                    continue;
-                }
+                    var getResponse = await _client.LowLevel.GetAsync<StringResponse>(index, id);
 
-                var body = strategy.BuildIndexDocument(item);
-                var resp = await _client.IndexAsync(body, i => i.Index(index).Id(id));
-
-                if (!resp.IsValid)
-                {
-                    failed = true;
-                    result.Message += $"Failed to index {index}/{id}: {resp.ServerError} ";
+                    if (getResponse.HttpStatusCode == 200 && !string.IsNullOrEmpty(getResponse.Body))
+                    {
+                        exists = true;
+                        try
+                        {
+                            var payload = JObject.Parse(getResponse.Body);
+                            existingHash = payload["_source"]?["content_hash"]?.Value<string>();
+                        }
+                        catch (JsonException)
+                        {
+                            // Ignore parse failures; treat as hash mismatch to force update.
+                        }
+                    }
+                    else if (getResponse.HttpStatusCode == 404)
+                    {
+                        exists = false;
+                    }
+                    else if (!getResponse.Success)
+                    {
+                        failed = true;
+                        result.Message += $"Failed to check {index}/{id}: {getResponse.DebugInformation} ";
+                        continue;
+                    }
                 }
                 else
                 {
-                    result.Message += $"Indexed {index}/{id}. ";
+                    var existsResponse = await _client.DocumentExistsAsync<object>(id, idx => idx.Index(index));
+                    exists = existsResponse.Exists;
+                    if (exists)
+                    {
+                        skipped++;
+                        result.Message += $"{index}/{id} already exists. Skipping. ";
+                        continue;
+                    }
+                }
+
+                if (incrementalUpdate && exists &&
+                    string.Equals(existingHash, contentHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    skipped++;
+                    result.Message += $"{index}/{id} up-to-date. ";
+                    continue;
+                }
+
+                await strategy.EnsureEmbeddingsAsync(item, _embeddingGenerator, padToTokens);
+
+                var body = strategy.BuildIndexDocument(item);
+                var docJson = JObject.FromObject(body ?? new { });
+                docJson["content_hash"] = contentHash;
+                docJson["updated_at"] = DateTime.UtcNow;
+
+                var resp = await _client.LowLevel.IndexAsync<StringResponse>(
+                    index,
+                    id,
+                    PostData.String(docJson.ToString(Formatting.None)));
+
+                if (!resp.Success)
+                {
+                    failed = true;
+                    result.Message += $"Failed to index {index}/{id}: {resp.DebugInformation} ";
+                }
+                else
+                {
+                    if (exists)
+                    {
+                        updated++;
+                        result.Message += $"Updated {index}/{id}. ";
+                    }
+                    else
+                    {
+                        created++;
+                        result.Message += $"Indexed {index}/{id}. ";
+                    }
                 }
             }
             catch (Exception ex)
@@ -117,8 +184,122 @@ public class OpenSearchHelper
             }
         }
 
+        if (incrementalUpdate)
+        {
+            result.Message += $"Summary => Created:{created}, Updated:{updated}, Skipped:{skipped}. ";
+            Console.WriteLine($"Incremental summary for '{lastIndexName ?? "index"}': Created={created}, Updated={updated}, Skipped={skipped}.");
+        }
+        else
+        {
+            Console.WriteLine($"Indexing complete for '{lastIndexName ?? "index"}': Created={created}, Updated={updated}, Skipped={skipped}.");
+        }
+
         result.Success = !failed;
         return result;
+    }
+
+    private async Task<bool> TryPopulateExistingHashesAsync(List<IndexDocInfo> docInfos)
+    {
+        const int batchSize = 256;
+
+        for (int i = 0; i < docInfos.Count; i += batchSize)
+        {
+            var batch = docInfos.Skip(i).Take(batchSize).ToList();
+            var payload = new
+            {
+                docs = batch.Select(info => new
+                {
+                    _index = info.Index,
+                    _id = info.Id,
+                    _source = new[] { "content_hash" }
+                })
+            };
+
+            var response = await _client.LowLevel.DoRequestAsync<StringResponse>(
+                OpenSearch.Net.HttpMethod.POST,
+                "_mget",
+                cancellationToken: CancellationToken.None,
+                data: PostData.String(JsonConvert.SerializeObject(payload)));
+
+            if (!response.Success || string.IsNullOrWhiteSpace(response.Body))
+                return false;
+
+            try
+            {
+                var root = JObject.Parse(response.Body);
+                if (root["docs"] is not JArray docsArray)
+                    return false;
+
+                for (int j = 0; j < batch.Count && j < docsArray.Count; j++)
+                {
+                    if (docsArray[j] is not JObject doc)
+                        continue;
+
+                    var info = batch[j];
+                    bool found = doc.Value<bool?>("found") ?? false;
+                    info.Exists = found;
+                    if (found)
+                    {
+                        info.ExistingHash = doc["_source"]?["content_hash"]?.Value<string>();
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private async Task<bool> TryPopulateSingleDocumentStateAsync(IndexDocInfo info)
+    {
+        var response = await _client.LowLevel.GetAsync<StringResponse>(info.Index, info.Id);
+
+        if (response.HttpStatusCode == 404)
+        {
+            info.Exists = false;
+            info.ExistingHash = null;
+            return true;
+        }
+
+        if (!response.Success || string.IsNullOrWhiteSpace(response.Body))
+            return false;
+
+        try
+        {
+            var payload = JObject.Parse(response.Body);
+            info.Exists = true;
+            info.ExistingHash = payload["_source"]?["content_hash"]?.Value<string>();
+            return true;
+        }
+        catch (JsonException)
+        {
+            info.Exists = true;
+            info.ExistingHash = null;
+            return true;
+        }
+    }
+
+    private sealed class IndexDocInfo
+    {
+        public IndexDocInfo(object item, IIndexingStrategy strategy, string index, string id, string contentHash)
+        {
+            Item = item;
+            Strategy = strategy;
+            Index = index;
+            Id = id;
+            ContentHash = contentHash;
+        }
+
+        public object Item { get; }
+        public IIndexingStrategy Strategy { get; }
+        public string Index { get; }
+        public string Id { get; }
+        public string ContentHash { get; }
+        public bool Exists { get; set; }
+        public string? ExistingHash { get; set; }
     }
     // in OpenSearchHelper
     private IIndexingStrategy StrategyForIndex(string index) =>
@@ -299,7 +480,9 @@ public class OpenSearchHelper
             if (exists.Exists)
             {
                 result.Success = true;
-                result.Message += "index already exists";
+                result.Message += recreateIndex
+                    ? "index already exists after recreation check"
+                    : "index already exists (retained)";
                 return result;
             }
 

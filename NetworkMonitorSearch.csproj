@@ -6,7 +6,7 @@
     <PublishProfile>DefaultContainer</PublishProfile>
     <ContainerBaseImage>mcr.microsoft.com/dotnet/aspnet:9.0</ContainerBaseImage>
   
-    <ContainerImageTag>0.3.9</ContainerImageTag>
+    <ContainerImageTag>0.3.10</ContainerImageTag>
       <StartupObject>NetworkMonitor.Search.Program</StartupObject>
           <Nullable>enable</Nullable>
                 <NoWarn>CS8618</NoWarn> 
@@ -40,11 +40,16 @@
     <PackageReference Include="NEST" Version="7.17.5" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="OpenSearch.Client" Version="1.8.0" />
-      <PackageReference Include="HostInitActions" Version="1.3.1" />
-      <PackageReference Include="Tokenizers.DotNet" Version="1.3.0" />
-      <PackageReference Include="Tokenizers.DotNet.runtime.linux-x64" Version="1.3.0" />
-      <PackageReference Include="Tokenizers.DotNet.runtime.win-x64" Version="1.3.0" />
-  
+    <PackageReference Include="HostInitActions" Version="1.3.1" />
+    <PackageReference Include="Tokenizers.DotNet" Version="1.3.0" />
+    <PackageReference Include="Tokenizers.DotNet.runtime.linux-x64" Version="1.3.0" />
+    <PackageReference Include="Tokenizers.DotNet.runtime.win-x64" Version="1.3.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
   </ItemGroup>
 
    <ItemGroup>

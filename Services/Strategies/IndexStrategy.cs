@@ -36,6 +36,7 @@ public interface IIndexingStrategy
     Task EnsureEmbeddingsAsync(object item, IEmbeddingGenerator generator, int padToTokens);
     string ComputeId(object item);
     object BuildIndexDocument(object item);
+    string ComputeContentHash(object item);
     bool CanHandle(object item);
     bool CanHandle(string indexName);
 
@@ -66,6 +67,13 @@ public abstract class IndexingStrategyBase<T> : IIndexingStrategy where T : clas
     public abstract Task EnsureEmbeddingsAsync(object item, IEmbeddingGenerator generator, int padToTokens);
     public abstract string ComputeId(object item);
     public abstract object BuildIndexDocument(object item);
+    public virtual string ComputeContentHash(object item)
+    {
+        var fields = GetFields(item) ?? Enumerable.Empty<string>();
+        var normalized = fields.Select(f => f ?? string.Empty);
+        var payload = string.Join("|", normalized);
+        return IdHelper.Sha256(payload);
+    }
 
     public virtual bool CanHandle(object item) => item is T;
     public virtual bool CanHandle(string indexName) => indexName.Equals(IndexName, StringComparison.OrdinalIgnoreCase);
@@ -262,6 +270,12 @@ public sealed class MitreIndexingStrategy : IndexingStrategyBase<Mitre>
             output = d.Output,
             embedding = d.Embedding
         };
+    }
+
+    public override string ComputeContentHash(object item)
+    {
+        var mitre = (Mitre)item;
+        return IdHelper.Sha256(mitre.Output ?? string.Empty);
     }
 
     public override string GetIndexMapping(int dim) => $@"
@@ -478,6 +492,25 @@ public sealed class BlogIndexingStrategy : IndexingStrategyBase<BlogIndexDocumen
         }
 
         return IdHelper.Sha256($"{blog.Title}:{blog.Url}");
+    }
+
+    public override string ComputeContentHash(object item)
+    {
+        if (item is not BlogIndexDocument blog)
+        {
+            return base.ComputeContentHash(item);
+        }
+
+        var contentSource = !string.IsNullOrWhiteSpace(blog.Content)
+            ? blog.Content
+            : blog.Summary;
+
+        var builder = new StringBuilder();
+        builder.Append(blog.Title ?? string.Empty)
+               .Append('|')
+               .Append(contentSource ?? string.Empty);
+
+        return IdHelper.Sha256(builder.ToString());
     }
 
     public override object BuildIndexDocument(object item)
