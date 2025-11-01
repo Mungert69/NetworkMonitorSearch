@@ -13,6 +13,7 @@ using System.Net.Http.Headers;
 using OpenSearch.Net;
 using NetworkMonitor.Objects;
 using System.Threading;
+using Microsoft.Extensions.Logging;
 
 namespace NetworkMonitor.Search.Services;
 
@@ -23,12 +24,14 @@ public class OpenSearchHelper
     private IEmbeddingGenerator _embeddingGenerator;
     private OSModelParams _modelParams;
     private readonly IReadOnlyList<IIndexingStrategy> _strategies;
+    private readonly ILogger<OpenSearchHelper> _logger;
     private readonly HttpClient _httpClient;
 
     public Uri SearchUri => _modelParams.SearchUri;
 
     public OpenSearchHelper(OSModelParams modelParams,
                               IEmbeddingGenerator embeddingGenerator,
+                              ILogger<OpenSearchHelper> logger,
                               params IIndexingStrategy[] strategies)
     {
 
@@ -36,6 +39,7 @@ public class OpenSearchHelper
 
         _modelParams = modelParams;
         _embeddingGenerator = embeddingGenerator;
+        _logger = logger;
         // Initialize OpenSearch client
         var settings = new ConnectionSettings(_modelParams.SearchUri)
             .DefaultIndex(_modelParams.DefaultIndex)
@@ -78,120 +82,207 @@ public class OpenSearchHelper
         int skipped = 0;
         string? lastIndexName = null;
 
-        foreach (var item in items)
+        var itemList = items?.ToList() ?? new List<object>();
+        if (itemList.Count == 0)
         {
-            // Pick the first strategy that says it can handle this artefact
+            result.Success = true;
+            result.Message += "No items to index. ";
+            _logger.LogTrace("No items supplied for indexing; exiting early.");
+            return result;
+        }
+
+        var docInfos = new List<IndexDocInfo>(itemList.Count);
+        int totalDocuments = 0;
+
+        foreach (var item in itemList)
+        {
             var strategy = _strategies.FirstOrDefault(s => s.CanHandle(item));
             if (strategy is null)
             {
                 result.Message += $"No strategy found for type {item.GetType().Name}. Skipping. ";
                 failed = true;
+                _logger.LogWarning("Skipping artefact of type {Type} because no strategy can handle it.", item.GetType().FullName);
                 continue;
             }
 
             try
             {
-                var id = strategy.ComputeId(item);
-                var index = strategy.IndexName;
-                var contentHash = strategy.ComputeContentHash(item);
-                bool exists = false;
-                string? existingHash = null;
-                lastIndexName = index;
+                var info = new IndexDocInfo(
+                    item,
+                    strategy,
+                    strategy.IndexName,
+                    strategy.ComputeId(item),
+                    strategy.ComputeContentHash(item));
+                docInfos.Add(info);
+                _logger.LogTrace("Prepared {Index}/{Id} with content hash {Hash}.", info.Index, info.Id, info.ContentHash);
+                totalDocuments++;
+            }
+            catch (Exception ex)
+            {
+                failed = true;
+                result.Message += $"Failed preparing {item.GetType().Name}: {ex.Message} ";
+                _logger.LogError(ex, "Failed preparing artefact {Type} for indexing.", item.GetType().FullName);
+            }
+        }
 
+        if (docInfos.Count == 0)
+        {
+            result.Success = !failed;
+            _logger.LogTrace("No valid artefacts remained after preparation; returning.");
+            return result;
+        }
+
+        bool hashesPrefetched = false;
+        if (incrementalUpdate)
+        {
+            _logger.LogTrace("Attempting batched hash prefetch for {Count} documents.", docInfos.Count);
+            hashesPrefetched = await TryPopulateExistingHashesAsync(docInfos);
+            if (!hashesPrefetched)
+            {
+                result.Message += "Warning: failed to prefetch existing hashes; falling back to per-document checks. ";
+                _logger.LogWarning("Hash prefetch via _mget failed; will fall back to per-document GET checks.");
+            }
+        }
+
+        foreach (var info in docInfos)
+        {
+            lastIndexName = info.Index;
+            info.EmbeddingsReused = false;
+            _logger.LogTrace("Processing {Index}/{Id}: incremental={Incremental} initialExists={Exists} hash={Hash}",
+                info.Index, info.Id, incrementalUpdate, info.Exists, info.ContentHash);
+
+            try
+            {
                 if (incrementalUpdate)
                 {
-                    var getResponse = await _client.LowLevel.GetAsync<StringResponse>(index, id);
+                    if (!hashesPrefetched)
+                    {
+                        var populated = await TryPopulateSingleDocumentStateAsync(info);
+                        if (!populated)
+                        {
+                            failed = true;
+                            result.Message += $"Failed to check {info.Index}/{info.Id}. ";
+                            _logger.LogWarning("Failed to retrieve state for {Index}/{Id}; skipping.", info.Index, info.Id);
+                            continue;
+                        }
+                    }
 
-                    if (getResponse.HttpStatusCode == 200 && !string.IsNullOrEmpty(getResponse.Body))
+                    if (info.Exists && info.ExistingHash != null &&
+                        string.Equals(info.ExistingHash, info.ContentHash, StringComparison.OrdinalIgnoreCase))
                     {
-                        exists = true;
-                        try
-                        {
-                            var payload = JObject.Parse(getResponse.Body);
-                            existingHash = payload["_source"]?["content_hash"]?.Value<string>();
-                        }
-                        catch (JsonException)
-                        {
-                            // Ignore parse failures; treat as hash mismatch to force update.
-                        }
-                    }
-                    else if (getResponse.HttpStatusCode == 404)
-                    {
-                        exists = false;
-                    }
-                    else if (!getResponse.Success)
-                    {
-                        failed = true;
-                        result.Message += $"Failed to check {index}/{id}: {getResponse.DebugInformation} ";
+                        skipped++;
+                        result.Message += $"{info.Index}/{info.Id} up-to-date. ";
+                        _logger.LogTrace("Skipping {Index}/{Id}; stored hash {ExistingHash} matches current hash {Hash}.",
+                            info.Index, info.Id, info.ExistingHash, info.ContentHash);
                         continue;
+                    }
+
+                    if (info.Exists && info.ExistingHash != null)
+                    {
+                        _logger.LogTrace("Hash mismatch for {Index}/{Id}; stored {ExistingHash}, incoming {Hash}.",
+                            info.Index, info.Id, info.ExistingHash, info.ContentHash);
+                    }
+                    else if (!info.Exists)
+                    {
+                        _logger.LogTrace("Document {Index}/{Id} not currently indexed; will create.", info.Index, info.Id);
+                    }
+                    else if (info.Exists)
+                    {
+                        _logger.LogTrace("Document {Index}/{Id} found without content hash; will backfill.", info.Index, info.Id);
+                    }
+
+                    if (info.Exists && string.IsNullOrEmpty(info.ExistingHash))
+                    {
+                        var source = info.ExistingSource ?? await FetchSourceAsync(info);
+                        if (source != null && info.Strategy.TryHydrateFromDocument(info.Item, source))
+                        {
+                            info.EmbeddingsReused = true;
+                            _logger.LogTrace("Reused stored embeddings for {Index}/{Id} based on persisted document.", info.Index, info.Id);
+                        }
+                        else
+                        {
+                            _logger.LogTrace("Stored document for {Index}/{Id} missing or content mismatch; embeddings will be regenerated.", info.Index, info.Id);
+                        }
                     }
                 }
                 else
                 {
-                    var existsResponse = await _client.DocumentExistsAsync<object>(id, idx => idx.Index(index));
-                    exists = existsResponse.Exists;
-                    if (exists)
+                    if (!info.Exists)
+                    {
+                        var existsResponse = await _client.DocumentExistsAsync<object>(info.Id, idx => idx.Index(info.Index));
+                        info.Exists = existsResponse.Exists;
+                        _logger.LogTrace("DocumentExists check for {Index}/{Id}: exists={Exists}", info.Index, info.Id, info.Exists);
+                    }
+
+                    if (info.Exists)
                     {
                         skipped++;
-                        result.Message += $"{index}/{id} already exists. Skipping. ";
+                        result.Message += $"{info.Index}/{info.Id} already exists. Skipping. ";
+                        _logger.LogTrace("Skipping {Index}/{Id}; document already exists and recreateIndex not requested.", info.Index, info.Id);
                         continue;
                     }
                 }
 
-                if (incrementalUpdate && exists &&
-                    string.Equals(existingHash, contentHash, StringComparison.OrdinalIgnoreCase))
+                await info.Strategy.EnsureEmbeddingsAsync(info.Item, _embeddingGenerator, padToTokens);
+                if (info.EmbeddingsReused)
                 {
-                    skipped++;
-                    result.Message += $"{index}/{id} up-to-date. ";
-                    continue;
+                    _logger.LogTrace("Confirmed embeddings reused for {Index}/{Id}; EnsureEmbeddingsAsync completed without regeneration.", info.Index, info.Id);
                 }
 
-                await strategy.EnsureEmbeddingsAsync(item, _embeddingGenerator, padToTokens);
-
-                var body = strategy.BuildIndexDocument(item);
+                var body = info.Strategy.BuildIndexDocument(info.Item);
                 var docJson = JObject.FromObject(body ?? new { });
-                docJson["content_hash"] = contentHash;
+                docJson["content_hash"] = info.ContentHash;
                 docJson["updated_at"] = DateTime.UtcNow;
 
                 var resp = await _client.LowLevel.IndexAsync<StringResponse>(
-                    index,
-                    id,
+                    info.Index,
+                    info.Id,
                     PostData.String(docJson.ToString(Formatting.None)));
 
                 if (!resp.Success)
                 {
                     failed = true;
-                    result.Message += $"Failed to index {index}/{id}: {resp.DebugInformation} ";
+                    result.Message += $"Failed to index {info.Index}/{info.Id}: {resp.DebugInformation} ";
+                    _logger.LogError("Failed to index {Index}/{Id}: {Info}", info.Index, info.Id, resp.DebugInformation);
                 }
                 else
                 {
-                    if (exists)
+                    if (info.Exists)
                     {
                         updated++;
-                        result.Message += $"Updated {index}/{id}. ";
+                        result.Message += $"Updated {info.Index}/{info.Id}. ";
+                        _logger.LogTrace("Updated {Index}/{Id}.", info.Index, info.Id);
                     }
                     else
                     {
                         created++;
-                        result.Message += $"Indexed {index}/{id}. ";
+                        result.Message += $"Indexed {info.Index}/{info.Id}. ";
+                        _logger.LogTrace("Created {Index}/{Id}.", info.Index, info.Id);
                     }
+
+                    info.Exists = true;
+                    info.ExistingHash = info.ContentHash;
                 }
             }
             catch (Exception ex)
             {
                 failed = true;
-                result.Message += $"Error for {item.GetType().Name}: {ex.Message} ";
+                result.Message += $"Error for {info.Index}/{info.Id}: {ex.Message} ";
+                _logger.LogError(ex, "Unexpected error while processing {Index}/{Id}.", info.Index, info.Id);
             }
         }
 
+        result.Message += $"Summary => Total:{totalDocuments}, Created:{created}, Updated:{updated}, Skipped:{skipped}. ";
+
         if (incrementalUpdate)
         {
-            result.Message += $"Summary => Created:{created}, Updated:{updated}, Skipped:{skipped}. ";
-            Console.WriteLine($"Incremental summary for '{lastIndexName ?? "index"}': Created={created}, Updated={updated}, Skipped={skipped}.");
+            _logger.LogInformation("Incremental summary for {Index}: Total={Total}, Created={Created}, Updated={Updated}, Skipped={Skipped}.",
+                lastIndexName ?? "index", totalDocuments, created, updated, skipped);
         }
         else
         {
-            Console.WriteLine($"Indexing complete for '{lastIndexName ?? "index"}': Created={created}, Updated={updated}, Skipped={skipped}.");
+            _logger.LogInformation("Indexing summary for {Index}: Total={Total}, Created={Created}, Updated={Updated}, Skipped={Skipped}.",
+                lastIndexName ?? "index", totalDocuments, created, updated, skipped);
         }
 
         result.Success = !failed;
@@ -205,6 +296,11 @@ public class OpenSearchHelper
         for (int i = 0; i < docInfos.Count; i += batchSize)
         {
             var batch = docInfos.Skip(i).Take(batchSize).ToList();
+            foreach (var info in batch)
+            {
+                info.ExistingSource = null;
+            }
+
             var payload = new
             {
                 docs = batch.Select(info => new
@@ -215,6 +311,8 @@ public class OpenSearchHelper
                 })
             };
 
+            _logger.LogTrace("Requesting batched hashes for {Count} documents.", batch.Count);
+
             var response = await _client.LowLevel.DoRequestAsync<StringResponse>(
                 OpenSearch.Net.HttpMethod.POST,
                 "_mget",
@@ -222,13 +320,19 @@ public class OpenSearchHelper
                 data: PostData.String(JsonConvert.SerializeObject(payload)));
 
             if (!response.Success || string.IsNullOrWhiteSpace(response.Body))
+            {
+                _logger.LogWarning("_mget hash prefetch failed with status {StatusCode}.", response.HttpStatusCode);
                 return false;
+            }
 
             try
             {
                 var root = JObject.Parse(response.Body);
                 if (root["docs"] is not JArray docsArray)
+                {
+                    _logger.LogWarning("Unexpected _mget response structure; missing docs array.");
                     return false;
+                }
 
                 for (int j = 0; j < batch.Count && j < docsArray.Count; j++)
                 {
@@ -238,14 +342,17 @@ public class OpenSearchHelper
                     var info = batch[j];
                     bool found = doc.Value<bool?>("found") ?? false;
                     info.Exists = found;
-                    if (found)
-                    {
-                        info.ExistingHash = doc["_source"]?["content_hash"]?.Value<string>();
-                    }
+                    info.ExistingHash = found
+                        ? doc["_source"]?["content_hash"]?.Value<string>()
+                        : null;
+
+                    _logger.LogTrace("Prefetch result for {Index}/{Id}: found={Found} hash={Hash}",
+                        info.Index, info.Id, found, info.ExistingHash);
                 }
             }
-            catch (JsonException)
+            catch (JsonException ex)
             {
+                _logger.LogWarning(ex, "Failed to parse _mget response.");
                 return false;
             }
         }
@@ -261,24 +368,69 @@ public class OpenSearchHelper
         {
             info.Exists = false;
             info.ExistingHash = null;
+            info.ExistingSource = null;
+            _logger.LogTrace("Document {Index}/{Id} not found during individual state check.", info.Index, info.Id);
             return true;
         }
 
         if (!response.Success || string.IsNullOrWhiteSpace(response.Body))
+        {
+            _logger.LogWarning("Failed individual state check for {Index}/{Id}; status {Status}.", info.Index, info.Id, response.HttpStatusCode);
             return false;
+        }
 
         try
         {
             var payload = JObject.Parse(response.Body);
             info.Exists = true;
             info.ExistingHash = payload["_source"]?["content_hash"]?.Value<string>();
+            info.ExistingSource = payload["_source"] as JObject;
+            _logger.LogTrace("Individual state for {Index}/{Id}: hash={Hash}.", info.Index, info.Id, info.ExistingHash);
             return true;
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
             info.Exists = true;
             info.ExistingHash = null;
+            info.ExistingSource = null;
+            _logger.LogWarning(ex, "Failed to parse individual GET response for {Index}/{Id}.", info.Index, info.Id);
             return true;
+        }
+    }
+
+    private async Task<JObject?> FetchSourceAsync(IndexDocInfo info)
+    {
+        var response = await _client.LowLevel.GetAsync<StringResponse>(info.Index, info.Id);
+
+        if (response.HttpStatusCode == 404)
+        {
+            info.Exists = false;
+            info.ExistingSource = null;
+            _logger.LogDebug("FetchSourceAsync: {Index}/{Id} not found.", info.Index, info.Id);
+            return null;
+        }
+
+        if (!response.Success || string.IsNullOrWhiteSpace(response.Body))
+        {
+            _logger.LogWarning("FetchSourceAsync failed for {Index}/{Id}; status {Status}.", info.Index, info.Id, response.HttpStatusCode);
+            return null;
+        }
+
+        try
+        {
+            var payload = JObject.Parse(response.Body);
+            info.Exists = true;
+            var source = payload["_source"] as JObject;
+            info.ExistingSource = source;
+            _logger.LogTrace("FetchSourceAsync: obtained source for {Index}/{Id}.", info.Index, info.Id);
+            return source;
+        }
+        catch (JsonException ex)
+        {
+            info.Exists = true;
+            info.ExistingSource = null;
+            _logger.LogWarning(ex, "FetchSourceAsync: failed to parse source for {Index}/{Id}.", info.Index, info.Id);
+            return null;
         }
     }
 
@@ -300,6 +452,8 @@ public class OpenSearchHelper
         public string ContentHash { get; }
         public bool Exists { get; set; }
         public string? ExistingHash { get; set; }
+        public JObject? ExistingSource { get; set; }
+        public bool EmbeddingsReused { get; set; }
     }
     // in OpenSearchHelper
     private IIndexingStrategy StrategyForIndex(string index) =>

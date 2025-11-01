@@ -41,6 +41,7 @@ namespace NetworkMonitor.Search
             _services = services;
             services.AddLogging(builder =>
                {
+                   builder.AddConfiguration(Configuration.GetSection("Logging"));
                    builder.AddSimpleConsole(options =>
                         {
                             options.TimestampFormat = "yyyy-MM-dd HH:mm:ss ";

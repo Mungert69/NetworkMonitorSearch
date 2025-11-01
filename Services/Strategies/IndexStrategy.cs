@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Collections.Generic;
 using NetworkMonitor.Objects;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace NetworkMonitor.Search.Services;
 
@@ -37,6 +38,7 @@ public interface IIndexingStrategy
     string ComputeId(object item);
     object BuildIndexDocument(object item);
     string ComputeContentHash(object item);
+    bool TryHydrateFromDocument(object item, JObject source);
     bool CanHandle(object item);
     bool CanHandle(string indexName);
 
@@ -74,6 +76,7 @@ public abstract class IndexingStrategyBase<T> : IIndexingStrategy where T : clas
         var payload = string.Join("|", normalized);
         return IdHelper.Sha256(payload);
     }
+    public virtual bool TryHydrateFromDocument(object item, JObject source) => false;
 
     public virtual bool CanHandle(object item) => item is T;
     public virtual bool CanHandle(string indexName) => indexName.Equals(IndexName, StringComparison.OrdinalIgnoreCase);
@@ -217,6 +220,25 @@ public sealed class DocumentIndexingStrategy : IndexingStrategyBase<Document>
         };
     }
 
+    public override bool TryHydrateFromDocument(object item, JObject source)
+    {
+        if (item is not Document doc || source is null) return false;
+
+        var storedInput = source["input"]?.Value<string>() ?? string.Empty;
+        var storedOutput = source["output"]?.Value<string>() ?? string.Empty;
+
+        if (!string.Equals(doc.Input ?? string.Empty, storedInput, StringComparison.Ordinal) ||
+            !string.Equals(doc.Output ?? string.Empty, storedOutput, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        doc.InputEmbedding = source["input_embedding"]?.ToObject<List<float>>() ?? new List<float>();
+        doc.OutputEmbedding = source["output_embedding"]?.ToObject<List<float>>() ?? new List<float>();
+
+        return doc.InputEmbedding.Count > 0 && doc.OutputEmbedding.Count > 0;
+    }
+
     public override string GetIndexMapping(int dim) => $@"
 {{
   ""settings"": {{ ""index"": {{ ""knn"": true }} }},
@@ -276,6 +298,18 @@ public sealed class MitreIndexingStrategy : IndexingStrategyBase<Mitre>
     {
         var mitre = (Mitre)item;
         return IdHelper.Sha256(mitre.Output ?? string.Empty);
+    }
+
+    public override bool TryHydrateFromDocument(object item, JObject source)
+    {
+        if (item is not Mitre doc || source is null) return false;
+
+        var storedOutput = source["output"]?.Value<string>() ?? string.Empty;
+        if (!string.Equals(doc.Output ?? string.Empty, storedOutput, StringComparison.Ordinal))
+            return false;
+
+        doc.Embedding = source["embedding"]?.ToObject<List<float>>() ?? new List<float>();
+        return doc.Embedding.Count > 0;
     }
 
     public override string GetIndexMapping(int dim) => $@"
@@ -353,6 +387,30 @@ public abstract class MultiVectorBookIndexingStrategyBase<T> : IndexingStrategyB
             output_embedding = book.OutputEmbedding,
             summary_embedding = book.SummaryEmbedding
         };
+    }
+
+    public override bool TryHydrateFromDocument(object item, JObject source)
+    {
+        if (item is not T book || source is null) return false;
+
+        var storedInput = source["input"]?.Value<string>() ?? string.Empty;
+        var storedOutput = source["output"]?.Value<string>() ?? string.Empty;
+        var storedSummary = source["summary"]?.Value<string>() ?? string.Empty;
+
+        if (!string.Equals(book.Input ?? string.Empty, storedInput, StringComparison.Ordinal) ||
+            !string.Equals(book.Output ?? string.Empty, storedOutput, StringComparison.Ordinal) ||
+            !string.Equals(book.Summary ?? string.Empty, storedSummary, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        book.InputEmbedding = source["input_embedding"]?.ToObject<List<float>>() ?? new List<float>();
+        book.OutputEmbedding = source["output_embedding"]?.ToObject<List<float>>() ?? new List<float>();
+        book.SummaryEmbedding = source["summary_embedding"]?.ToObject<List<float>>() ?? new List<float>();
+
+        return book.InputEmbedding.Count > 0 &&
+               book.OutputEmbedding.Count > 0 &&
+               book.SummaryEmbedding.Count > 0;
     }
 
     public override string GetIndexMapping(int dim) => $@"
@@ -597,5 +655,33 @@ public sealed class BlogIndexingStrategy : IndexingStrategyBase<BlogIndexDocumen
             Score = hit.Score,
             Metadata = metadata
         };
+    }
+
+    public override bool TryHydrateFromDocument(object item, JObject source)
+    {
+        if (item is not BlogIndexDocument blog || source is null) return false;
+
+        var storedTitle = source["title"]?.Value<string>() ?? string.Empty;
+        var storedContent = source["content"]?.Value<string>() ?? string.Empty;
+        var storedSummary = source["summary"]?.Value<string>() ?? string.Empty;
+
+        if (!string.Equals(blog.Title ?? string.Empty, storedTitle, StringComparison.Ordinal))
+            return false;
+
+        var desiredContent = !string.IsNullOrWhiteSpace(blog.Content)
+            ? blog.Content
+            : blog.Summary ?? string.Empty;
+
+        var storedContentSource = !string.IsNullOrWhiteSpace(storedContent)
+            ? storedContent
+            : storedSummary;
+
+        if (!string.Equals(desiredContent ?? string.Empty, storedContentSource ?? string.Empty, StringComparison.Ordinal))
+            return false;
+
+        blog.TitleEmbedding = source["title_embedding"]?.ToObject<List<float>>() ?? new List<float>();
+        blog.ContentEmbedding = source["content_embedding"]?.ToObject<List<float>>() ?? new List<float>();
+
+        return blog.TitleEmbedding.Count > 0 && blog.ContentEmbedding.Count > 0;
     }
 }

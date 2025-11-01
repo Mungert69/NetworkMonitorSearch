@@ -49,11 +49,12 @@ namespace NetworkMonitor.Search.Services
             MLParams mlParams,
             SystemParams systemParams,
             IRabbitRepo rabbitRepo,
-            IEmbeddingGenerator embeddingGenerator
+            IEmbeddingGenerator embeddingGenerator,
+            ILoggerFactory loggerFactory
         )
         {
             _logger = logger;
-            _rabbitRepo = rabbitRepo;
+                        _rabbitRepo = rabbitRepo;
 
             // Map MLParams to OSModelParams
             _modelParams = new OSModelParams
@@ -98,7 +99,11 @@ namespace NetworkMonitor.Search.Services
                 new BlogIndexingStrategy()
             };
 
-            _openSearchHelper = new OpenSearchHelper(_modelParams, embeddingGenerator, _strategies);
+            _openSearchHelper = new OpenSearchHelper(
+                _modelParams,
+                embeddingGenerator,
+                loggerFactory.CreateLogger<OpenSearchHelper>(),
+                _strategies);
 
             // Log all parameters read in the constructor
             _logger.LogInformation(
@@ -241,6 +246,43 @@ namespace NetworkMonitor.Search.Services
             return (null, null);
         }
 
+        private (int padToTokens, int actualMaxTokens) CalculatePadToTokensFromItems(string indexName, IIndexingStrategy strategy, IEnumerable<object> items)
+        {
+            int pad = _minTokenLengthCap;
+            int maxSeen = _minTokenLengthCap;
+
+            try
+            {
+                var tokenizer = new AutoTokenizer(_modelParams.EmbeddingModelDir, _maxTokenLengthCap);
+
+                foreach (var item in items)
+                {
+                    foreach (var text in strategy.GetFields(item) ?? Array.Empty<string>())
+                    {
+                        if (string.IsNullOrWhiteSpace(text))
+                            continue;
+
+                        int tokens = tokenizer.CountTokens(text);
+                        maxSeen = Math.Max(maxSeen, tokens);
+                        pad = Math.Max(pad, tokens);
+                        if (pad >= _maxTokenLengthCap)
+                            break;
+                    }
+                }
+
+                pad = Math.Clamp(pad, _minTokenLengthCap, _maxTokenLengthCap);
+                maxSeen = Math.Max(maxSeen, _minTokenLengthCap);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to calculate padToTokens for index {Index}; defaulting to {Pad}.", indexName, _minTokenLengthCap);
+                pad = _minTokenLengthCap;
+                maxSeen = _minTokenLengthCap;
+            }
+
+            return (pad, maxSeen);
+        }
+
         private TimeSpan? ResolveQueryTimeout(string indexName)
         {
             if (!string.IsNullOrWhiteSpace(indexName) &&
@@ -263,16 +305,9 @@ namespace NetworkMonitor.Search.Services
 
             // Try to load pad tokens for this index, fail if not found
             var (padToTokens, _) = LoadIndexMaxTokens(createIndexRequest.IndexName);
-            if (!padToTokens.HasValue)
-            {
-                return new ResultObj
-                {
-                    Success = false,
-                    Message = $"Error: Could not find padToTokens for index '{createIndexRequest.IndexName}'."
-                };
-            }
+            int padValue = padToTokens.HasValue ? padToTokens.Value : -1;
 
-            return await CreateIndexAsync(createIndexRequest, padToTokens.Value);
+            return await CreateIndexAsync(createIndexRequest, padValue);
         }
         public async Task<ResultObj> CreateIndexAsync(CreateIndexRequest createIndexRequest, int padToTokens)
         {
@@ -329,7 +364,27 @@ namespace NetworkMonitor.Search.Services
                     return result;
                 }
 
-                Console.WriteLine($"Deserialization for index '{createIndexRequest.IndexName}' succeeded. Indexing with {padToTokens} tokens.");
+                var sourceDescriptor = !string.IsNullOrWhiteSpace(createIndexRequest.JsonFile)
+                    ? createIndexRequest.JsonFile
+                    : "inline payload";
+                Console.WriteLine($"Loaded {items.Count} documents for index '{createIndexRequest.IndexName}' from '{sourceDescriptor}'.");
+                result.Message += $"Documents={items.Count}. ";
+
+                int effectivePadToTokens = padToTokens;
+                if (effectivePadToTokens <= 0)
+                {
+                    var (calculatedPad, actualMaxTokens) = CalculatePadToTokensFromItems(createIndexRequest.IndexName, deserializer, items);
+                    effectivePadToTokens = calculatedPad;
+                    SaveIndexMaxTokens(createIndexRequest.IndexName, effectivePadToTokens, actualMaxTokens);
+                    Console.WriteLine($"Calculated padToTokens for index '{createIndexRequest.IndexName}' = {effectivePadToTokens} (actual max {actualMaxTokens}).");
+                    result.Message += $"Computed padToTokens={effectivePadToTokens}, actualMaxTokens={actualMaxTokens}. ";
+                }
+                else
+                {
+                    SaveIndexMaxTokens(createIndexRequest.IndexName, effectivePadToTokens);
+                }
+
+                Console.WriteLine($"Deserialization for index '{createIndexRequest.IndexName}' succeeded. Indexing with {effectivePadToTokens} tokens.");
 
                 if (createIndexRequest.IncrementalUpdate)
                 {
@@ -350,7 +405,7 @@ namespace NetworkMonitor.Search.Services
                 var resultEn = await _openSearchHelper.EnsureIndexExistsAsync(indexName: createIndexRequest.IndexName, recreateIndex: createIndexRequest.RecreateIndex);
                 if (!resultEn.Success) return resultEn;
 
-                var resultIn = await _openSearchHelper.IndexDocumentsAsync(items, padToTokens, createIndexRequest.IncrementalUpdate);
+                var resultIn = await _openSearchHelper.IndexDocumentsAsync(items, effectivePadToTokens, createIndexRequest.IncrementalUpdate);
                 createIndexRequest.Success = resultEn.Success && resultIn.Success;
                 createIndexRequest.Message += resultEn.Message + resultIn.Message;
 
