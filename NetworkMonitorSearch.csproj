@@ -5,7 +5,8 @@
     <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
     <PublishProfile>DefaultContainer</PublishProfile>
     <ContainerBaseImage>mcr.microsoft.com/dotnet/aspnet:10.0</ContainerBaseImage>
-  
+       <RollForward>Minor</RollForward>
+
     <ContainerImageTag>0.4.0</ContainerImageTag>
       <StartupObject>NetworkMonitor.Search.Program</StartupObject>
           <Nullable>enable</Nullable>
