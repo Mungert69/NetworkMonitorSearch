@@ -7,7 +7,7 @@
     <ContainerBaseImage>mcr.microsoft.com/dotnet/aspnet:10.0</ContainerBaseImage>
        <RollForward>Minor</RollForward>
 
-    <ContainerImageTag>0.4.0</ContainerImageTag>
+    <ContainerImageTag>0.4.1</ContainerImageTag>
       <StartupObject>NetworkMonitor.Search.Program</StartupObject>
           <Nullable>enable</Nullable>
                 <NoWarn>CS8618</NoWarn> 
