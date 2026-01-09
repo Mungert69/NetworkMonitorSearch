@@ -1,4 +1,28 @@
 #!/bin/sh
-value=`cat ../secret`
-git pull https://mungert69:$value@github.com/Mungert69/NetworkMonitorSearch
-dotnet publish -m --os linux --arch x64 -p:PublishProfile=DefaultContainer -c Release-Dev --self-contained true 
+set -eu
+
+CONFIG="Release-Dev"
+
+# value=$(cat ../secret)
+# git pull "https://mungert69:$value@github.com/Mungert69/NetworkMonitorSearch"
+
+TAG="$(sed -n 's/.*<ContainerImageTag>\(.*\)<\/ContainerImageTag>.*/\1/p' NetworkMonitorSearch.csproj | head -n1)"
+[ -n "${TAG:-}" ] || TAG="latest"
+
+REPO="$(
+  awk -v cfg="$CONFIG" '
+    /<PropertyGroup/ && /Condition/ && index($0,cfg){inpg=1}
+    inpg && /<ContainerRepository>/{line=$0;sub(/.*<ContainerRepository>/,"",line);sub(/<\/ContainerRepository>.*/,"",line);print line;exit}
+    inpg && /<\/PropertyGroup>/{inpg=0}
+  ' NetworkMonitorSearch.csproj
+)"
+[ -n "${REPO:-}" ] || REPO="mungert/networkmonitorsearch-dev"
+
+echo "Publishing multi-arch container: $REPO:$TAG ($CONFIG)"
+
+dotnet test --nologo || true
+
+dotnet publish NetworkMonitorSearch.csproj \
+  -c "$CONFIG" \
+  -t:PublishContainer
+

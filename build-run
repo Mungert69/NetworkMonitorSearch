@@ -1,4 +1,32 @@
 #!/bin/sh
-value=`cat ../secret`
-git pull https://mungert69:$value@github.com/Mungert69/NetworkMonitorSearch
-dotnet publish -m --os linux --arch x64 -p:PublishProfile=DefaultContainer -c Release --self-contained true 
+set -eu
+
+CONFIG="Release"
+
+# Pull updates if you really need to (avoid embedding secrets in CLI when possible)
+# value=$(cat ../secret)
+# git pull "https://mungert69:$value@github.com/Mungert69/NetworkMonitorSearch"
+
+# Read tag from csproj
+TAG="$(sed -n 's/.*<ContainerImageTag>\(.*\)<\/ContainerImageTag>.*/\1/p' NetworkMonitorSearch.csproj | head -n1)"
+[ -n "${TAG:-}" ] || TAG="latest"
+
+# Read repo from matching PropertyGroup
+REPO="$(
+  awk -v cfg="$CONFIG" '
+    /<PropertyGroup/ && /Condition/ && index($0,cfg){inpg=1}
+    inpg && /<ContainerRepository>/{line=$0;sub(/.*<ContainerRepository>/,"",line);sub(/<\/ContainerRepository>.*/,"",line);print line;exit}
+    inpg && /<\/PropertyGroup>/{inpg=0}
+  ' NetworkMonitorSearch.csproj
+)"
+[ -n "${REPO:-}" ] || REPO="mungert/networkmonitorsearch"
+
+echo "Publishing multi-arch container: $REPO:$TAG ($CONFIG)"
+
+# Optional tests (add specific test projects if you have them)
+dotnet test --nologo || true
+
+dotnet publish NetworkMonitorSearch.csproj \
+  -c "$CONFIG" \
+  -t:PublishContainer
+
