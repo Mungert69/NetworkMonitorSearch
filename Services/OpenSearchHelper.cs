@@ -26,6 +26,7 @@ public class OpenSearchHelper
     private readonly IReadOnlyList<IIndexingStrategy> _strategies;
     private readonly ILogger<OpenSearchHelper> _logger;
     private readonly HttpClient _httpClient;
+    private const string HistoryIndexName = "llm_history";
 
     public Uri SearchUri => _modelParams.SearchUri;
 
@@ -610,6 +611,260 @@ public class OpenSearchHelper
             return await _httpClient.PostAsync(requestUri, content, cancellationToken);
 
         return await _httpClient.PostAsync(requestUri, content);
+    }
+
+    private static string BuildHistoryDocId(string serviceId, string sessionId)
+    {
+        var cleanService = string.IsNullOrWhiteSpace(serviceId) ? "default" : serviceId.Trim().ToLowerInvariant();
+        var cleanSession = string.IsNullOrWhiteSpace(sessionId) ? "missing" : sessionId.Trim().ToLowerInvariant();
+        var raw = $"{cleanService}:{cleanSession}";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw))).ToLowerInvariant();
+    }
+
+    public async Task EnsureHistoryIndexExistsAsync()
+    {
+        var exists = await _client.Indices.ExistsAsync(HistoryIndexName);
+        if (exists.Exists)
+        {
+            _logger.LogDebug("History index '{Index}' already exists.", HistoryIndexName);
+            return;
+        }
+
+        _logger.LogInformation("History index '{Index}' not found. Creating it now.", HistoryIndexName);
+
+        var mapping = @"
+{
+  ""settings"": {
+    ""index"": { ""number_of_shards"": 1, ""number_of_replicas"": 1 }
+  },
+  ""mappings"": {
+    ""properties"": {
+      ""service_id"": { ""type"": ""keyword"" },
+      ""session_id"": { ""type"": ""keyword"" },
+      ""user_id"": { ""type"": ""keyword"" },
+      ""start_unix_time"": { ""type"": ""long"" },
+      ""name"": { ""type"": ""text"" },
+      ""llm_type"": { ""type"": ""keyword"" },
+      ""history_json"": { ""type"": ""text"" },
+      ""updated_at"": { ""type"": ""date"" }
+    }
+  }
+}";
+        var create = await _client.LowLevel.Indices.CreateAsync<StringResponse>(HistoryIndexName, PostData.String(mapping));
+        if (!create.Success)
+        {
+            _logger.LogError("Failed creating history index '{Index}'. Debug={Debug}", HistoryIndexName, create.DebugInformation);
+            throw new InvalidOperationException($"Failed creating history index '{HistoryIndexName}': {create.DebugInformation}");
+        }
+
+        _logger.LogInformation("History index '{Index}' created successfully.", HistoryIndexName);
+    }
+
+    public async Task<HistoryStoreResponse> UpsertHistoryAsync(HistoryStoreRequest request)
+    {
+        await EnsureHistoryIndexExistsAsync();
+
+        var docId = BuildHistoryDocId(request.ServiceId, request.SessionId);
+        _logger.LogInformation(
+            "History upsert start index={Index} docId={DocId} service={ServiceId} session={SessionId} user={UserId} historyBytes={HistoryBytes}",
+            HistoryIndexName,
+            docId,
+            request.ServiceId,
+            request.SessionId,
+            request.UserId,
+            request.HistoryJson?.Length ?? 0);
+        var body = new
+        {
+            service_id = request.ServiceId,
+            session_id = request.SessionId,
+            user_id = request.UserId,
+            start_unix_time = request.StartUnixTime,
+            name = request.Name,
+            llm_type = request.LlmType,
+            history_json = request.HistoryJson,
+            updated_at = DateTime.UtcNow
+        };
+        var json = JsonConvert.SerializeObject(body);
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
+        var response = await _httpClient.PutAsync($"/{HistoryIndexName}/_doc/{docId}?refresh=true", content);
+        var responseBody = await response.Content.ReadAsStringAsync();
+        _logger.LogInformation(
+            "History upsert end index={Index} docId={DocId} status={StatusCode} success={Success}",
+            HistoryIndexName,
+            docId,
+            (int)response.StatusCode,
+            response.IsSuccessStatusCode);
+
+        return new HistoryStoreResponse
+        {
+            Success = response.IsSuccessStatusCode,
+            Message = response.IsSuccessStatusCode
+                ? "History upserted."
+                : $"Failed to upsert history: {response.StatusCode} {responseBody}"
+        };
+    }
+
+    public async Task<HistoryStoreResponse> GetHistoryAsync(HistoryStoreRequest request)
+    {
+        await EnsureHistoryIndexExistsAsync();
+        var docId = BuildHistoryDocId(request.ServiceId, request.SessionId);
+        _logger.LogInformation(
+            "History get start index={Index} docId={DocId} service={ServiceId} session={SessionId}",
+            HistoryIndexName,
+            docId,
+            request.ServiceId,
+            request.SessionId);
+        var response = await _httpClient.GetAsync($"/{HistoryIndexName}/_doc/{docId}");
+        var responseBody = await response.Content.ReadAsStringAsync();
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.LogWarning(
+                "History get failed index={Index} docId={DocId} status={StatusCode} body={Body}",
+                HistoryIndexName,
+                docId,
+                (int)response.StatusCode,
+                responseBody);
+            return new HistoryStoreResponse
+            {
+                Success = false,
+                Message = $"Failed to load history: {response.StatusCode} {responseBody}"
+            };
+        }
+
+        var json = JObject.Parse(responseBody);
+        var source = json["_source"] as JObject;
+        if (source == null)
+        {
+            return new HistoryStoreResponse { Success = false, Message = "History source is missing." };
+        }
+
+        _logger.LogInformation("History get success index={Index} docId={DocId}", HistoryIndexName, docId);
+        return new HistoryStoreResponse
+        {
+            Success = true,
+            Message = "History loaded.",
+            Item = new HistoryStoreResultItem
+            {
+                ServiceId = source.Value<string>("service_id") ?? "",
+                SessionId = source.Value<string>("session_id") ?? "",
+                UserId = source.Value<string>("user_id") ?? "",
+                StartUnixTime = source.Value<long?>("start_unix_time") ?? 0,
+                Name = source.Value<string>("name") ?? "",
+                LlmType = source.Value<string>("llm_type") ?? "",
+                HistoryJson = source.Value<string>("history_json") ?? ""
+            }
+        };
+    }
+
+    public async Task<HistoryStoreResponse> DeleteHistoryAsync(HistoryStoreRequest request)
+    {
+        await EnsureHistoryIndexExistsAsync();
+        var docId = BuildHistoryDocId(request.ServiceId, request.SessionId);
+        _logger.LogInformation(
+            "History delete start index={Index} docId={DocId} service={ServiceId} session={SessionId}",
+            HistoryIndexName,
+            docId,
+            request.ServiceId,
+            request.SessionId);
+        var response = await _httpClient.DeleteAsync($"/{HistoryIndexName}/_doc/{docId}?refresh=true");
+        var responseBody = await response.Content.ReadAsStringAsync();
+        _logger.LogInformation(
+            "History delete end index={Index} docId={DocId} status={StatusCode} success={Success}",
+            HistoryIndexName,
+            docId,
+            (int)response.StatusCode,
+            response.IsSuccessStatusCode);
+
+        return new HistoryStoreResponse
+        {
+            Success = response.IsSuccessStatusCode,
+            Message = response.IsSuccessStatusCode
+                ? "History deleted."
+                : $"Failed to delete history: {response.StatusCode} {responseBody}"
+        };
+    }
+
+    public async Task<HistoryStoreResponse> ListHistoryAsync(HistoryStoreRequest request)
+    {
+        await EnsureHistoryIndexExistsAsync();
+        var size = request.Limit <= 0 ? 100 : Math.Min(request.Limit, 500);
+        _logger.LogInformation(
+            "History list start index={Index} service={ServiceId} user={UserId} limit={Limit}",
+            HistoryIndexName,
+            request.ServiceId,
+            request.UserId,
+            size);
+
+        var filters = new List<object>();
+        if (!string.IsNullOrWhiteSpace(request.ServiceId))
+        {
+            filters.Add(new { term = new Dictionary<string, object> { ["service_id"] = request.ServiceId } });
+        }
+        if (!string.IsNullOrWhiteSpace(request.UserId))
+        {
+            filters.Add(new { term = new Dictionary<string, object> { ["user_id"] = request.UserId } });
+        }
+
+        object queryObj = filters.Count == 0
+            ? new { match_all = new { } }
+            : new { @bool = new { filter = filters } };
+
+        var searchRequest = new
+        {
+            size,
+            sort = new object[] { new Dictionary<string, object> { ["start_unix_time"] = new { order = "desc" } } },
+            query = queryObj
+        };
+
+        var payload = JsonConvert.SerializeObject(searchRequest);
+        using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+        var response = await _httpClient.PostAsync($"/{HistoryIndexName}/_search", content);
+        var responseBody = await response.Content.ReadAsStringAsync();
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.LogWarning(
+                "History list failed index={Index} status={StatusCode} body={Body}",
+                HistoryIndexName,
+                (int)response.StatusCode,
+                responseBody);
+            return new HistoryStoreResponse
+            {
+                Success = false,
+                Message = $"Failed to list history: {response.StatusCode} {responseBody}"
+            };
+        }
+
+        var root = JObject.Parse(responseBody);
+        var hits = root["hits"]?["hits"] as JArray ?? new JArray();
+        var items = new List<HistoryStoreResultItem>(hits.Count);
+        foreach (var hit in hits.OfType<JObject>())
+        {
+            var source = hit["_source"] as JObject;
+            if (source == null) continue;
+            items.Add(new HistoryStoreResultItem
+            {
+                ServiceId = source.Value<string>("service_id") ?? "",
+                SessionId = source.Value<string>("session_id") ?? "",
+                UserId = source.Value<string>("user_id") ?? "",
+                StartUnixTime = source.Value<long?>("start_unix_time") ?? 0,
+                Name = source.Value<string>("name") ?? "",
+                LlmType = source.Value<string>("llm_type") ?? "",
+                HistoryJson = source.Value<string>("history_json") ?? ""
+            });
+        }
+
+        _logger.LogInformation(
+            "History list success index={Index} service={ServiceId} user={UserId} returned={Count}",
+            HistoryIndexName,
+            request.ServiceId,
+            request.UserId,
+            items.Count);
+        return new HistoryStoreResponse
+        {
+            Success = true,
+            Message = $"Loaded {items.Count} histories.",
+            Items = items
+        };
     }
 
     public async Task<ResultObj> EnsureIndexExistsAsync(

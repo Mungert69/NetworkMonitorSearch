@@ -15,6 +15,7 @@ namespace NetworkMonitor.Search.Services
     {
         Task<ResultObj> CreateIndex(CreateIndexRequest createIndexRequest);
         Task<ResultObj> QueryIndex(QueryIndexRequest queryIndexRequest);
+        Task<ResultObj> HistoryStore(HistoryStoreRequest historyStoreRequest);
         Task<ResultObj> CreateSnapshot(CreateSnapshotRequest createSnapshotRequest);
         Task Shutdown();
         Task<ResultObj> Setup();
@@ -56,6 +57,13 @@ namespace NetworkMonitor.Search.Services
             {
                 ExchangeName = "createSnapshot",
                 FuncName = "createSnapshot",
+                MessageTimeout = 60000
+            });
+
+            _rabbitMQObjs.Add(new RabbitMQObj()
+            {
+                ExchangeName = "historyStore",
+                FuncName = "historyStore",
                 MessageTimeout = 60000
             });
         }
@@ -123,6 +131,21 @@ namespace NetworkMonitor.Search.Services
                                     catch (Exception ex)
                                     {
                                         _logger.LogError(" Error : RabbitListener.DeclareConsumers.createSnapshot " + ex.Message);
+                                    }
+                                };
+                                break;
+                            case "historyStore":
+                                await rabbitMQObj.ConnectChannel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
+                                rabbitMQObj.Consumer.ReceivedAsync += async (model, ea) =>
+                                {
+                                    try
+                                    {
+                                        result = await HistoryStore(ConvertToObject<HistoryStoreRequest>(model, ea));
+                                        await rabbitMQObj.ConnectChannel.BasicAckAsync(ea.DeliveryTag, false);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _logger.LogError(" Error : RabbitListener.DeclareConsumers.historyStore " + ex.Message);
                                     }
                                 };
                                 break;
@@ -207,6 +230,53 @@ namespace NetworkMonitor.Search.Services
                 result.Message += $"Error: Failed to query index. Error was: {e.Message}";
                 _logger.LogError(result.Message);
             }
+            return result;
+        }
+
+        public async Task<ResultObj> HistoryStore(HistoryStoreRequest? historyStoreRequest)
+        {
+            var result = new ResultObj
+            {
+                Success = false,
+                Message = "MessageAPI: HistoryStore: "
+            };
+
+            if (historyStoreRequest == null)
+            {
+                result.Message += "Error: historyStoreRequest is null.";
+                return result;
+            }
+
+            try
+            {
+                _logger.LogInformation(
+                    "MessageAPI: HistoryStore: received operation={Operation} service={ServiceId} session={SessionId} user={UserId} app={AppID} messageId={MessageID}",
+                    historyStoreRequest.Operation,
+                    historyStoreRequest.ServiceId,
+                    historyStoreRequest.SessionId,
+                    historyStoreRequest.UserId,
+                    historyStoreRequest.AppID,
+                    historyStoreRequest.MessageID);
+
+                var storeResponse = await _openSearchService.HandleHistoryStoreAsync(historyStoreRequest);
+                result.Success = storeResponse.Success;
+                result.Message += storeResponse.Message;
+
+                _logger.LogInformation(
+                    "MessageAPI: HistoryStore: completed operation={Operation} service={ServiceId} session={SessionId} success={Success} message={Message}",
+                    historyStoreRequest.Operation,
+                    historyStoreRequest.ServiceId,
+                    historyStoreRequest.SessionId,
+                    storeResponse.Success,
+                    storeResponse.Message);
+            }
+            catch (Exception e)
+            {
+                result.Success = false;
+                result.Message += $"Error: Failed history store operation. Error was: {e.Message}";
+                _logger.LogError(result.Message);
+            }
+
             return result;
         }
 
