@@ -675,7 +675,11 @@ namespace NetworkMonitor.Search.Services
                             request.IndexName,
                             useMaxTokens,
                             request.VectorSearchMode,
-                            ResolveQueryTimeout(request.IndexName));
+                            ResolveQueryTimeout(request.IndexName),
+                            userId: request.UserId,
+                            sessionId: request.SessionId,
+                            topK: request.TopK,
+                            includeToolTurns: request.IncludeToolTurns);
 
                         if (searchResponse != null)
                         {
