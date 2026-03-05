@@ -19,6 +19,9 @@ namespace NetworkMonitor.Search.Services
     {
         Task Init();
         Task<ResultObj> QueryIndexAsync(QueryIndexRequest queryIndexRequest);
+        Task<ResultObj> QueryMemoryAsync(MemoryQueryRequest memoryQueryRequest);
+        Task<ResultObj> QueryMemoryTurnWindowAsync(MemoryTurnWindowRequest memoryTurnWindowRequest);
+        Task<ResultObj> HistoryStoreAsync(HistoryStoreRequest historyStoreRequest);
 
         // New methods for snapshot and bulk index creation
         Task<ResultObj> CreateSnapshotAsync(string snapshotRepo, string snapshotName, string indices = "documents,mitre,securitybooks");
@@ -208,6 +211,7 @@ namespace NetworkMonitor.Search.Services
         // Store padToTokens per index
         private readonly Dictionary<string, int> _indexMaxTokens = new();
         private readonly Dictionary<string, TimeSpan> _indexQueryTimeouts = new(StringComparer.OrdinalIgnoreCase);
+        private const string MemoryTurnsIndex = "llm_history_turns";
 
 
 
@@ -645,6 +649,268 @@ namespace NetworkMonitor.Search.Services
                     failureStage,
                     queryIndexRequest.IndexName,
                     targetUri);
+            }
+
+            return result;
+        }
+
+        public async Task<ResultObj> QueryMemoryAsync(MemoryQueryRequest memoryQueryRequest)
+        {
+            var result = new ResultObj
+            {
+                Success = true,
+                Message = "MessageAPI: QueryMemoryAsync: "
+            };
+
+            if (memoryQueryRequest == null)
+            {
+                result.Success = false;
+                result.Message += "Error: memoryQueryRequest is null.";
+                return result;
+            }
+
+            memoryQueryRequest.Success = false;
+
+            if (EncryptHelper.IsBadKey(_llmEncryptKey, memoryQueryRequest.AuthKey, memoryQueryRequest.AppID))
+            {
+                result.Message += $" Error : Failed QueryMemoryAsync bad AuthKey for AppID {memoryQueryRequest.AppID}";
+                _logger.LogError(result.Message);
+                return result;
+            }
+
+            if (string.IsNullOrWhiteSpace(memoryQueryRequest.QueryText))
+            {
+                result.Success = false;
+                result.Message += "Error: query text is empty.";
+                memoryQueryRequest.Message = result.Message;
+                return result;
+            }
+
+            try
+            {
+                var ensure = await _openSearchHelper.EnsureHistoryTurnsIndexExistsAsync(MemoryTurnsIndex);
+                if (!ensure.Success)
+                {
+                    result.Success = false;
+                    result.Message += ensure.Message;
+                }
+                else
+                {
+                    int padTokens = _minTokenLengthCap > 0 ? _minTokenLengthCap : 256;
+                    int topK = memoryQueryRequest.TopK <= 0 ? 8 : Math.Clamp(memoryQueryRequest.TopK, 1, 50);
+                    var timeout = ResolveQueryTimeout(MemoryTurnsIndex);
+
+                    var memoryResults = await _openSearchHelper.SearchHistoryTurnsAsync(
+                        memoryQueryRequest.QueryText,
+                        padTokens,
+                        MemoryTurnsIndex,
+                        memoryQueryRequest.UserId,
+                        memoryQueryRequest.SessionId,
+                        topK,
+                        memoryQueryRequest.IncludeToolTurns,
+                        timeout);
+
+                    var sourceScope = string.IsNullOrWhiteSpace(memoryQueryRequest.SessionId) ? "user_global" : "session_only";
+                    foreach (var item in memoryResults)
+                    {
+                        item.SourceScope = sourceScope;
+                    }
+
+                    memoryQueryRequest.Results = memoryResults;
+                    memoryQueryRequest.Success = true;
+                    memoryQueryRequest.Message = $"Memory query executed. Hits={memoryResults.Count}.";
+                    result.Success = true;
+                    result.Message += memoryQueryRequest.Message;
+                }
+
+                var responseExchange = string.IsNullOrWhiteSpace(memoryQueryRequest.ResponseExchange)
+                    ? $"{memoryQueryRequest.AppID}MemoryQueryResult"
+                    : memoryQueryRequest.ResponseExchange;
+
+                if (string.IsNullOrEmpty(memoryQueryRequest.RoutingKey))
+                {
+                    await _rabbitRepo.PublishAsync(responseExchange, memoryQueryRequest);
+                }
+                else
+                {
+                    await _rabbitRepo.PublishAsync(responseExchange, memoryQueryRequest, memoryQueryRequest.RoutingKey);
+                }
+            }
+            catch (Exception ex)
+            {
+                result.Success = false;
+                result.Message += $"Error querying memory: {ex.GetType().Name}: {ex.Message}";
+                _logger.LogError(ex, "MessageAPI: QueryMemoryAsync failed");
+            }
+
+            return result;
+        }
+
+        public async Task<ResultObj> QueryMemoryTurnWindowAsync(MemoryTurnWindowRequest memoryTurnWindowRequest)
+        {
+            var result = new ResultObj
+            {
+                Success = true,
+                Message = "MessageAPI: QueryMemoryTurnWindowAsync: "
+            };
+
+            if (memoryTurnWindowRequest == null)
+            {
+                result.Success = false;
+                result.Message += "Error: memoryTurnWindowRequest is null.";
+                return result;
+            }
+
+            memoryTurnWindowRequest.Success = false;
+            if (EncryptHelper.IsBadKey(_llmEncryptKey, memoryTurnWindowRequest.AuthKey, memoryTurnWindowRequest.AppID))
+            {
+                result.Message += $" Error : Failed QueryMemoryTurnWindowAsync bad AuthKey for AppID {memoryTurnWindowRequest.AppID}";
+                _logger.LogError(result.Message);
+                return result;
+            }
+
+            if (string.IsNullOrWhiteSpace(memoryTurnWindowRequest.SessionId))
+            {
+                result.Success = false;
+                result.Message += "Error: session_id is empty.";
+                memoryTurnWindowRequest.Message = result.Message;
+                return result;
+            }
+
+            try
+            {
+                var ensure = await _openSearchHelper.EnsureHistoryTurnsIndexExistsAsync(MemoryTurnsIndex);
+                if (!ensure.Success)
+                {
+                    result.Success = false;
+                    result.Message += ensure.Message;
+                }
+                else
+                {
+                    var timeout = ResolveQueryTimeout(MemoryTurnsIndex);
+                    var turns = await _openSearchHelper.GetHistoryTurnWindowAsync(
+                        memoryTurnWindowRequest.SessionId,
+                        memoryTurnWindowRequest.TurnIndex,
+                        memoryTurnWindowRequest.WidthBefore,
+                        memoryTurnWindowRequest.WidthAfter,
+                        MemoryTurnsIndex,
+                        timeout);
+
+                    memoryTurnWindowRequest.Turns = turns;
+                    memoryTurnWindowRequest.Success = true;
+                    memoryTurnWindowRequest.Message = $"Memory turn window executed. Turns={turns.Count}.";
+                    result.Success = true;
+                    result.Message += memoryTurnWindowRequest.Message;
+                }
+
+                var responseExchange = string.IsNullOrWhiteSpace(memoryTurnWindowRequest.ResponseExchange)
+                    ? $"{memoryTurnWindowRequest.AppID}MemoryTurnWindowResult"
+                    : memoryTurnWindowRequest.ResponseExchange;
+
+                if (string.IsNullOrEmpty(memoryTurnWindowRequest.RoutingKey))
+                {
+                    await _rabbitRepo.PublishAsync(responseExchange, memoryTurnWindowRequest);
+                }
+                else
+                {
+                    await _rabbitRepo.PublishAsync(responseExchange, memoryTurnWindowRequest, memoryTurnWindowRequest.RoutingKey);
+                }
+            }
+            catch (Exception ex)
+            {
+                result.Success = false;
+                result.Message += $"Error querying memory turn window: {ex.GetType().Name}: {ex.Message}";
+                _logger.LogError(ex, "MessageAPI: QueryMemoryTurnWindowAsync failed");
+            }
+
+            return result;
+        }
+
+        public async Task<ResultObj> HistoryStoreAsync(HistoryStoreRequest historyStoreRequest)
+        {
+            var result = new ResultObj
+            {
+                Success = false,
+                Message = "MessageAPI: HistoryStoreAsync: "
+            };
+
+            if (historyStoreRequest == null)
+            {
+                result.Message += "Error: historyStoreRequest is null.";
+                return result;
+            }
+
+            if (EncryptHelper.IsBadKey(_llmEncryptKey, historyStoreRequest.AuthKey, historyStoreRequest.AppID))
+            {
+                result.Message += $"Error: bad AuthKey for AppID {historyStoreRequest.AppID}.";
+                _logger.LogError(result.Message);
+                return result;
+            }
+
+            var response = new HistoryStoreResponse
+            {
+                Success = false,
+                MessageID = historyStoreRequest.MessageID
+            };
+
+            try
+            {
+                var ensure = await _openSearchHelper.EnsureHistoryTurnsIndexExistsAsync(MemoryTurnsIndex);
+                if (!ensure.Success)
+                {
+                    response.Success = false;
+                    response.Message = ensure.Message;
+                }
+                else
+                {
+                    switch (historyStoreRequest.Operation)
+                    {
+                        case HistoryStoreOperation.upsert:
+                        {
+                            int padTokens = _minTokenLengthCap > 0 ? _minTokenLengthCap : 256;
+                            var upsert = await _openSearchHelper.UpsertHistoryTurnsAsync(historyStoreRequest, padTokens, MemoryTurnsIndex);
+                            response.Success = upsert.Success;
+                            response.Message = upsert.Message;
+                            break;
+                        }
+                        case HistoryStoreOperation.delete:
+                        {
+                            var delete = await _openSearchHelper.DeleteHistoryTurnsBySessionAsync(
+                                historyStoreRequest.SessionId,
+                                historyStoreRequest.ServiceId,
+                                MemoryTurnsIndex);
+                            response.Success = delete.Success;
+                            response.Message = delete.Message;
+                            break;
+                        }
+                        default:
+                            response.Success = true;
+                            response.Message = $"Operation '{historyStoreRequest.Operation}' acknowledged but not implemented for OpenSearch history mirror.";
+                            break;
+                    }
+                }
+
+                var responseExchange = string.IsNullOrWhiteSpace(historyStoreRequest.ResponseExchange)
+                    ? $"{historyStoreRequest.AppID}HistoryStoreResult"
+                    : historyStoreRequest.ResponseExchange;
+
+                if (string.IsNullOrWhiteSpace(historyStoreRequest.RoutingKey))
+                {
+                    await _rabbitRepo.PublishAsync(responseExchange, response);
+                }
+                else
+                {
+                    await _rabbitRepo.PublishAsync(responseExchange, response, historyStoreRequest.RoutingKey);
+                }
+
+                result.Success = response.Success;
+                result.Message += response.Message;
+            }
+            catch (Exception ex)
+            {
+                result.Success = false;
+                result.Message += $"Error processing history operation '{historyStoreRequest.Operation}': {ex.Message}";
+                _logger.LogError(ex, "MessageAPI: HistoryStoreAsync failed");
             }
 
             return result;

@@ -711,4 +711,653 @@ public class OpenSearchHelper
             return builder.ToString();
         }
     }
+
+    public async Task<ResultObj> EnsureHistoryTurnsIndexExistsAsync(string indexName = "llm_history_turns")
+    {
+        var result = new ResultObj { Message = "EnsureHistoryTurnsIndexExistsAsync: " };
+        try
+        {
+            var exists = await _client.Indices.ExistsAsync(indexName);
+            if (exists.Exists)
+            {
+                result.Success = true;
+                result.Message += $"History index '{indexName}' already exists.";
+                return result;
+            }
+
+            var mapping = $@"
+{{
+  ""settings"": {{ ""index"": {{ ""knn"": true }} }},
+  ""mappings"": {{
+    ""properties"": {{
+      ""service_id"": {{ ""type"": ""keyword"" }},
+      ""session_id"": {{ ""type"": ""keyword"" }},
+      ""user_id"": {{ ""type"": ""keyword"" }},
+      ""llm_type"": {{ ""type"": ""keyword"" }},
+      ""role"": {{ ""type"": ""keyword"" }},
+      ""turn_index"": {{ ""type"": ""integer"" }},
+      ""turn_unix_time"": {{ ""type"": ""long"" }},
+      ""text"": {{ ""type"": ""text"" }},
+      ""content_hash"": {{ ""type"": ""keyword"" }},
+      ""turn_embedding"": {{
+        ""type"": ""knn_vector"",
+        ""dimension"": {_modelParams.EmbeddingModelVecDim},
+        ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }}
+      }}
+    }}
+  }}
+}}";
+
+            var create = await _client.LowLevel.Indices.CreateAsync<StringResponse>(indexName, PostData.String(mapping));
+            result.Success = create.Success;
+            result.Message += create.Success
+                ? $"History index '{indexName}' created."
+                : $"Failed creating history index '{indexName}': {create.DebugInformation}";
+        }
+        catch (Exception ex)
+        {
+            result.Success = false;
+            result.Message += ex.Message;
+        }
+
+        return result;
+    }
+
+    public async Task<ResultObj> UpsertHistoryTurnsAsync(HistoryStoreRequest request, int padToTokens, string indexName = "llm_history_turns")
+    {
+        var result = new ResultObj { Success = false, Message = "UpsertHistoryTurnsAsync: " };
+        if (request == null || string.IsNullOrWhiteSpace(request.HistoryJson))
+        {
+            result.Message += "No history payload.";
+            return result;
+        }
+
+        try
+        {
+            var turns = ParseHistoryTurns(request);
+            if (turns.Count == 0)
+            {
+                result.Success = true;
+                result.Message += "No indexable turns in payload.";
+                return result;
+            }
+
+            var docs = turns.Select(t =>
+            {
+                var hash = ComputeSha256Hash(t.Text);
+                var docId = ComputeSha256Hash($"{request.ServiceId}|{request.SessionId}|{t.TurnIndex}|{t.Role}|{hash}");
+                return new HistoryTurnDoc
+                {
+                    Id = docId,
+                    ServiceId = request.ServiceId ?? string.Empty,
+                    SessionId = request.SessionId ?? string.Empty,
+                    UserId = request.UserId ?? string.Empty,
+                    LlmType = request.LlmType ?? string.Empty,
+                    Role = t.Role,
+                    TurnIndex = t.TurnIndex,
+                    TurnUnixTime = t.TurnUnixTime,
+                    Text = t.Text,
+                    ContentHash = hash
+                };
+            }).ToList();
+
+            var existing = await GetExistingHistoryTurnIdsAsync(indexName, docs.Select(d => d.Id).ToList());
+            var created = 0;
+            var skipped = 0;
+
+            foreach (var doc in docs)
+            {
+                if (existing.Contains(doc.Id))
+                {
+                    skipped++;
+                    continue;
+                }
+
+                doc.TurnEmbedding = await GenerateEmbeddingAsync(doc.Text, padToTokens);
+                if (doc.TurnEmbedding.Count == 0)
+                {
+                    _logger.LogWarning("History turn embedding empty for session {SessionId} turn {TurnIndex}", doc.SessionId, doc.TurnIndex);
+                    continue;
+                }
+
+                var body = new
+                {
+                    service_id = doc.ServiceId,
+                    session_id = doc.SessionId,
+                    user_id = doc.UserId,
+                    llm_type = doc.LlmType,
+                    role = doc.Role,
+                    turn_index = doc.TurnIndex,
+                    turn_unix_time = doc.TurnUnixTime,
+                    text = doc.Text,
+                    content_hash = doc.ContentHash,
+                    turn_embedding = doc.TurnEmbedding
+                };
+
+                var resp = await _client.LowLevel.IndexAsync<StringResponse>(indexName, doc.Id, PostData.Serializable(body));
+                if (resp.Success)
+                {
+                    created++;
+                }
+                else
+                {
+                    _logger.LogWarning("Failed indexing history turn {DocId}: {Debug}", doc.Id, resp.DebugInformation);
+                }
+            }
+
+            result.Success = true;
+            result.Message += $"Indexed turns created={created}, skipped_existing={skipped}, total={docs.Count}.";
+        }
+        catch (Exception ex)
+        {
+            result.Success = false;
+            result.Message += ex.Message;
+        }
+
+        return result;
+    }
+
+    public async Task<ResultObj> DeleteHistoryTurnsBySessionAsync(string sessionId, string serviceId = "", string indexName = "llm_history_turns")
+    {
+        var result = new ResultObj { Success = false, Message = "DeleteHistoryTurnsBySessionAsync: " };
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            result.Message += "sessionId is required.";
+            return result;
+        }
+
+        try
+        {
+            var must = new List<object>
+            {
+                new { term = new Dictionary<string, object> { ["session_id"] = sessionId } }
+            };
+
+            if (!string.IsNullOrWhiteSpace(serviceId))
+            {
+                must.Add(new { term = new Dictionary<string, object> { ["service_id"] = serviceId } });
+            }
+
+            var query = new
+            {
+                query = new
+                {
+                    @bool = new
+                    {
+                        must
+                    }
+                }
+            };
+
+            var response = await _client.LowLevel.DeleteByQueryAsync<StringResponse>(indexName, PostData.Serializable(query));
+            result.Success = response.Success;
+            result.Message += response.Success
+                ? $"Deleted history turns for session {sessionId}."
+                : $"Delete by query failed: {response.DebugInformation}";
+        }
+        catch (Exception ex)
+        {
+            result.Success = false;
+            result.Message += ex.Message;
+        }
+
+        return result;
+    }
+
+    public async Task<List<MemoryQueryResult>> SearchHistoryTurnsAsync(
+        string queryText,
+        int padToTokens,
+        string indexName = "llm_history_turns",
+        string userId = "",
+        string sessionId = "",
+        int topK = 8,
+        bool includeToolTurns = false,
+        TimeSpan? requestTimeout = null,
+        CancellationToken cancellationToken = default)
+    {
+        var queryEmbedding = await GenerateEmbeddingAsync(queryText, padToTokens);
+        if (queryEmbedding.Count == 0)
+        {
+            throw new Exception("Failed to generate memory query embedding.");
+        }
+
+        topK = Math.Clamp(topK <= 0 ? 8 : topK, 1, 50);
+
+        var filters = new List<object>();
+        if (!string.IsNullOrWhiteSpace(userId))
+        {
+            filters.Add(new { term = new Dictionary<string, object> { ["user_id"] = userId } });
+        }
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            filters.Add(new { term = new Dictionary<string, object> { ["session_id"] = sessionId } });
+        }
+        var mustNot = new List<object>();
+        if (!includeToolTurns)
+        {
+            mustNot.Add(new { term = new Dictionary<string, object> { ["role"] = "tool" } });
+        }
+
+        var requestBody = new
+        {
+            size = topK,
+            query = new
+            {
+                @bool = new
+                {
+                    filter = filters,
+                    must_not = mustNot,
+                    must = new object[]
+                    {
+                        new
+                        {
+                            knn = new Dictionary<string, object>
+                            {
+                                ["turn_embedding"] = new
+                                {
+                                    vector = queryEmbedding,
+                                    k = topK
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        var json = JsonConvert.SerializeObject(requestBody);
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
+        var response = await PostWithTimeoutAsync($"/{indexName}/_search", content, requestTimeout, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new Exception($"Memory search failed: {response.ReasonPhrase}");
+        }
+
+        var body = await response.Content.ReadAsStringAsync();
+        var root = JObject.Parse(body);
+        var hits = root["hits"]?["hits"] as JArray ?? new JArray();
+        var results = new List<MemoryQueryResult>(hits.Count);
+        var raw = new List<MemoryQueryResult>(hits.Count);
+
+        foreach (var hit in hits.OfType<JObject>())
+        {
+            var source = hit["_source"] as JObject;
+            if (source == null) continue;
+
+            var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["index"] = hit["_index"]?.Value<string>() ?? string.Empty,
+                ["id"] = hit["_id"]?.Value<string>() ?? string.Empty
+            };
+
+            raw.Add(new MemoryQueryResult
+            {
+                Role = source["role"]?.Value<string>() ?? string.Empty,
+                Text = source["text"]?.Value<string>() ?? string.Empty,
+                ServiceId = source["service_id"]?.Value<string>() ?? string.Empty,
+                SessionId = source["session_id"]?.Value<string>() ?? string.Empty,
+                UserId = source["user_id"]?.Value<string>() ?? string.Empty,
+                TurnIndex = source["turn_index"]?.Value<int>() ?? 0,
+                TurnUnixTime = source["turn_unix_time"]?.Value<long>() ?? 0,
+                Score = hit["_score"]?.Value<float>() ?? 0f,
+                Metadata = metadata
+            });
+        }
+
+        await EnrichMemoryResultsWithContextAsync(raw, queryText, indexName, requestTimeout, cancellationToken);
+        results.AddRange(raw);
+        return results;
+    }
+
+    public async Task<List<MemoryContextTurn>> GetHistoryTurnWindowAsync(
+        string sessionId,
+        int turnIndex,
+        int widthBefore,
+        int widthAfter,
+        string indexName = "llm_history_turns",
+        TimeSpan? requestTimeout = null,
+        CancellationToken cancellationToken = default)
+    {
+        widthBefore = Math.Clamp(widthBefore, 0, 20);
+        widthAfter = Math.Clamp(widthAfter, 0, 20);
+        var from = Math.Max(0, turnIndex - widthBefore);
+        var to = Math.Max(from, turnIndex + widthAfter);
+
+        var body = new
+        {
+            size = (to - from) + 1,
+            sort = new object[]
+            {
+                new Dictionary<string, object> { ["turn_index"] = "asc" }
+            },
+            query = new
+            {
+                @bool = new
+                {
+                    filter = new object[]
+                    {
+                        new { term = new Dictionary<string, object> { ["session_id"] = sessionId } },
+                        new
+                        {
+                            range = new Dictionary<string, object>
+                            {
+                                ["turn_index"] = new
+                                {
+                                    gte = from,
+                                    lte = to
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        var json = JsonConvert.SerializeObject(body);
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
+        var response = await PostWithTimeoutAsync($"/{indexName}/_search", content, requestTimeout, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new Exception($"History turn window search failed: {response.ReasonPhrase}");
+        }
+
+        var payload = await response.Content.ReadAsStringAsync();
+        var root = JObject.Parse(payload);
+        var hits = root["hits"]?["hits"] as JArray ?? new JArray();
+        var turns = new List<MemoryContextTurn>(hits.Count);
+
+        foreach (var hit in hits.OfType<JObject>())
+        {
+            var source = hit["_source"] as JObject;
+            if (source == null) continue;
+            turns.Add(new MemoryContextTurn
+            {
+                Role = source["role"]?.Value<string>() ?? string.Empty,
+                Text = source["text"]?.Value<string>() ?? string.Empty,
+                TurnIndex = source["turn_index"]?.Value<int>() ?? 0,
+                TurnUnixTime = source["turn_unix_time"]?.Value<long>() ?? 0
+            });
+        }
+
+        return turns;
+    }
+
+    private async Task EnrichMemoryResultsWithContextAsync(
+        List<MemoryQueryResult> results,
+        string queryText,
+        string indexName,
+        TimeSpan? requestTimeout,
+        CancellationToken cancellationToken)
+    {
+        if (results.Count == 0)
+        {
+            return;
+        }
+
+        // Confidence is relative to the best returned hit for this query.
+        var maxScore = results.Max(r => r.Score);
+        var sourceScope = results.Any(r => !string.IsNullOrWhiteSpace(r.SessionId))
+            ? "session_or_user_scoped"
+            : "user_global";
+
+        // Build session->requested-index set so we fetch context turns in one request per session.
+        var sessionIndexMap = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal);
+        foreach (var item in results)
+        {
+            if (string.IsNullOrWhiteSpace(item.SessionId))
+            {
+                continue;
+            }
+
+            if (!sessionIndexMap.TryGetValue(item.SessionId, out var set))
+            {
+                set = new HashSet<int>();
+                sessionIndexMap[item.SessionId] = set;
+            }
+
+            set.Add(item.TurnIndex - 1);
+            set.Add(item.TurnIndex);
+            set.Add(item.TurnIndex + 1);
+        }
+
+        var sessionTurns = new Dictionary<string, Dictionary<int, MemoryContextTurn>>(StringComparer.Ordinal);
+        foreach (var pair in sessionIndexMap)
+        {
+            var indices = pair.Value.Where(i => i >= 0).Distinct().ToList();
+            if (indices.Count == 0)
+            {
+                continue;
+            }
+
+            var turns = await FetchSessionTurnsAsync(indexName, pair.Key, indices, requestTimeout, cancellationToken);
+            sessionTurns[pair.Key] = turns;
+        }
+
+        foreach (var item in results)
+        {
+            var ratio = maxScore > 0f ? (item.Score / maxScore) : 0f;
+            var confidence = ratio >= 0.9f ? "high" : ratio >= 0.75f ? "medium" : "low";
+
+            item.ConfidenceBand = confidence;
+            item.WhyMatched = $"Semantic match score={item.Score:0.###} for intent='{queryText}'.";
+            item.QueryIntent = queryText;
+            item.SourceScope = sourceScope;
+
+            if (sessionTurns.TryGetValue(item.SessionId, out var turnMap))
+            {
+                if (turnMap.TryGetValue(item.TurnIndex - 1, out var before))
+                {
+                    item.ContextBefore.Add(before);
+                }
+                if (turnMap.TryGetValue(item.TurnIndex + 1, out var after))
+                {
+                    item.ContextAfter.Add(after);
+                }
+            }
+        }
+    }
+
+    private async Task<Dictionary<int, MemoryContextTurn>> FetchSessionTurnsAsync(
+        string indexName,
+        string sessionId,
+        List<int> turnIndices,
+        TimeSpan? requestTimeout,
+        CancellationToken cancellationToken)
+    {
+        var result = new Dictionary<int, MemoryContextTurn>();
+        if (string.IsNullOrWhiteSpace(sessionId) || turnIndices.Count == 0)
+        {
+            return result;
+        }
+
+        var body = new
+        {
+            size = turnIndices.Count,
+            query = new
+            {
+                @bool = new
+                {
+                    filter = new object[]
+                    {
+                        new { term = new Dictionary<string, object> { ["session_id"] = sessionId } },
+                        new { terms = new Dictionary<string, object> { ["turn_index"] = turnIndices } }
+                    }
+                }
+            }
+        };
+
+        var json = JsonConvert.SerializeObject(body);
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
+        var response = await PostWithTimeoutAsync($"/{indexName}/_search", content, requestTimeout, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            return result;
+        }
+
+        var payload = await response.Content.ReadAsStringAsync();
+        var root = JObject.Parse(payload);
+        var hits = root["hits"]?["hits"] as JArray ?? new JArray();
+        foreach (var hit in hits.OfType<JObject>())
+        {
+            var source = hit["_source"] as JObject;
+            if (source == null) continue;
+            var idx = source["turn_index"]?.Value<int>() ?? -1;
+            if (idx < 0) continue;
+
+            result[idx] = new MemoryContextTurn
+            {
+                Role = source["role"]?.Value<string>() ?? string.Empty,
+                Text = source["text"]?.Value<string>() ?? string.Empty,
+                TurnIndex = idx,
+                TurnUnixTime = source["turn_unix_time"]?.Value<long>() ?? 0
+            };
+        }
+
+        return result;
+    }
+
+    private async Task<HashSet<string>> GetExistingHistoryTurnIdsAsync(string indexName, List<string> ids)
+    {
+        var existing = new HashSet<string>(StringComparer.Ordinal);
+        if (ids.Count == 0) return existing;
+
+        var payload = new
+        {
+            docs = ids.Select(id => new
+            {
+                _index = indexName,
+                _id = id,
+                _source = false
+            })
+        };
+
+        var response = await _client.LowLevel.DoRequestAsync<StringResponse>(
+            OpenSearch.Net.HttpMethod.POST,
+            "_mget",
+            cancellationToken: CancellationToken.None,
+            data: PostData.Serializable(payload));
+
+        if (!response.Success || string.IsNullOrWhiteSpace(response.Body))
+        {
+            return existing;
+        }
+
+        var root = JObject.Parse(response.Body);
+        var docs = root["docs"] as JArray;
+        if (docs == null) return existing;
+
+        foreach (var doc in docs.OfType<JObject>())
+        {
+            if ((doc["found"]?.Value<bool>() ?? false))
+            {
+                var id = doc["_id"]?.Value<string>();
+                if (!string.IsNullOrWhiteSpace(id))
+                {
+                    existing.Add(id);
+                }
+            }
+        }
+
+        return existing;
+    }
+
+    private static List<ParsedHistoryTurn> ParseHistoryTurns(HistoryStoreRequest request)
+    {
+        var turns = new List<ParsedHistoryTurn>();
+        var root = JObject.Parse(request.HistoryJson);
+        var history = root["history"] as JArray;
+        if (history == null) return turns;
+
+        long baseUnix = request.StartUnixTime > 0
+            ? request.StartUnixTime
+            : DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        for (var i = 0; i < history.Count; i++)
+        {
+            if (history[i] is not JObject msg) continue;
+            var role = msg["role"]?.Value<string>() ?? string.Empty;
+            var content = msg["content"]?.Value<string>() ?? string.Empty;
+
+            string text = string.Empty;
+            if (!string.IsNullOrWhiteSpace(content))
+            {
+                text = content.Trim();
+            }
+            else if (string.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase) && msg["tool_calls"] is JArray toolCalls && toolCalls.Count > 0)
+            {
+                text = "Assistant issued a tool call.";
+            }
+            else if (string.Equals(role, "tool", StringComparison.OrdinalIgnoreCase))
+            {
+                text = ExtractToolStatusText(content);
+            }
+
+            if (string.IsNullOrWhiteSpace(text)) continue;
+
+            turns.Add(new ParsedHistoryTurn
+            {
+                Role = string.IsNullOrWhiteSpace(role) ? "unknown" : role.Trim().ToLowerInvariant(),
+                Text = text,
+                TurnIndex = i,
+                TurnUnixTime = baseUnix + i
+            });
+        }
+
+        return turns;
+    }
+
+    private static string ExtractToolStatusText(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return "Tool response received.";
+        }
+
+        try
+        {
+            var token = JToken.Parse(content);
+            if (token is JObject obj)
+            {
+                var status = obj["status"]?.ToString();
+                var success = obj["success"]?.ToString();
+                var message = obj["message"]?.ToString();
+                var error = obj["error"]?.ToString();
+                var compact = $"{status} {success} {message} {error}".Trim();
+                if (!string.IsNullOrWhiteSpace(compact))
+                {
+                    return compact.Length > 280 ? compact.Substring(0, 280) : compact;
+                }
+            }
+        }
+        catch
+        {
+            // treat as plain text below
+        }
+
+        var plain = content.Trim();
+        return plain.Length > 280 ? plain.Substring(0, 280) : plain;
+    }
+
+    private sealed class ParsedHistoryTurn
+    {
+        public string Role { get; set; } = string.Empty;
+        public string Text { get; set; } = string.Empty;
+        public int TurnIndex { get; set; }
+        public long TurnUnixTime { get; set; }
+    }
+
+    private sealed class HistoryTurnDoc
+    {
+        public string Id { get; set; } = string.Empty;
+        public string ServiceId { get; set; } = string.Empty;
+        public string SessionId { get; set; } = string.Empty;
+        public string UserId { get; set; } = string.Empty;
+        public string LlmType { get; set; } = string.Empty;
+        public string Role { get; set; } = string.Empty;
+        public int TurnIndex { get; set; }
+        public long TurnUnixTime { get; set; }
+        public string Text { get; set; } = string.Empty;
+        public string ContentHash { get; set; } = string.Empty;
+        public List<float> TurnEmbedding { get; set; } = new List<float>();
+    }
 }

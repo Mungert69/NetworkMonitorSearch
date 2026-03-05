@@ -42,7 +42,7 @@ namespace NetworkMonitor.Objects
         public Total Total { get; set; }
 
         [JsonProperty("max_score")]
-        public float MaxScore { get; set; }
+        public float? MaxScore { get; set; }
 
         [JsonProperty("hits")]
         public List<Hit> HitsList { get; set; } = new();

@@ -15,6 +15,9 @@ namespace NetworkMonitor.Search.Services
     {
         Task<ResultObj> CreateIndex(CreateIndexRequest createIndexRequest);
         Task<ResultObj> QueryIndex(QueryIndexRequest queryIndexRequest);
+        Task<ResultObj> QueryMemory(MemoryQueryRequest memoryQueryRequest);
+        Task<ResultObj> QueryMemoryTurnWindow(MemoryTurnWindowRequest request);
+        Task<ResultObj> HistoryStore(HistoryStoreRequest historyStoreRequest);
         Task<ResultObj> CreateSnapshot(CreateSnapshotRequest createSnapshotRequest);
         Task Shutdown();
         Task<ResultObj> Setup();
@@ -49,6 +52,24 @@ namespace NetworkMonitor.Search.Services
             {
                 ExchangeName = "queryIndex",
                 FuncName = "queryIndex",
+                MessageTimeout = 60000
+            });
+            _rabbitMQObjs.Add(new RabbitMQObj()
+            {
+                ExchangeName = "queryMemory",
+                FuncName = "queryMemory",
+                MessageTimeout = 60000
+            });
+            _rabbitMQObjs.Add(new RabbitMQObj()
+            {
+                ExchangeName = "queryMemoryTurnWindow",
+                FuncName = "queryMemoryTurnWindow",
+                MessageTimeout = 60000
+            });
+            _rabbitMQObjs.Add(new RabbitMQObj()
+            {
+                ExchangeName = "historyStore",
+                FuncName = "historyStore",
                 MessageTimeout = 60000
             });
 
@@ -123,6 +144,51 @@ namespace NetworkMonitor.Search.Services
                                     catch (Exception ex)
                                     {
                                         _logger.LogError(" Error : RabbitListener.DeclareConsumers.createSnapshot " + ex.Message);
+                                    }
+                                };
+                                break;
+                            case "queryMemory":
+                                await rabbitMQObj.ConnectChannel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
+                                rabbitMQObj.Consumer.ReceivedAsync += async (model, ea) =>
+                                {
+                                    try
+                                    {
+                                        result = await QueryMemory(ConvertToObject<MemoryQueryRequest>(model, ea));
+                                        await rabbitMQObj.ConnectChannel.BasicAckAsync(ea.DeliveryTag, false);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _logger.LogError(" Error : RabbitListener.DeclareConsumers.queryMemory " + ex.Message);
+                                    }
+                                };
+                                break;
+                            case "historyStore":
+                                await rabbitMQObj.ConnectChannel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
+                                rabbitMQObj.Consumer.ReceivedAsync += async (model, ea) =>
+                                {
+                                    try
+                                    {
+                                        result = await HistoryStore(ConvertToObject<HistoryStoreRequest>(model, ea));
+                                        await rabbitMQObj.ConnectChannel.BasicAckAsync(ea.DeliveryTag, false);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _logger.LogError(" Error : RabbitListener.DeclareConsumers.historyStore " + ex.Message);
+                                    }
+                                };
+                                break;
+                            case "queryMemoryTurnWindow":
+                                await rabbitMQObj.ConnectChannel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
+                                rabbitMQObj.Consumer.ReceivedAsync += async (model, ea) =>
+                                {
+                                    try
+                                    {
+                                        result = await QueryMemoryTurnWindow(ConvertToObject<MemoryTurnWindowRequest>(model, ea));
+                                        await rabbitMQObj.ConnectChannel.BasicAckAsync(ea.DeliveryTag, false);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _logger.LogError(" Error : RabbitListener.DeclareConsumers.queryMemoryTurnWindow " + ex.Message);
                                     }
                                 };
                                 break;
@@ -205,6 +271,88 @@ namespace NetworkMonitor.Search.Services
             {
                 result.Success = false;
                 result.Message += $"Error: Failed to query index. Error was: {e.Message}";
+                _logger.LogError(result.Message);
+            }
+            return result;
+        }
+
+        public async Task<ResultObj> QueryMemory(MemoryQueryRequest? memoryQueryRequest)
+        {
+            var result = new ResultObj();
+            result.Success = false;
+            result.Message = "MessageAPI: QueryMemory: ";
+            if (memoryQueryRequest == null)
+            {
+                result.Message += "Error: memoryQueryRequest is null.";
+                return result;
+            }
+
+            try
+            {
+                var queryMemoryResult = await _openSearchService.QueryMemoryAsync(memoryQueryRequest);
+                result.Success = queryMemoryResult.Success;
+                result.Message += queryMemoryResult.Message;
+                _logger.LogInformation(result.Message);
+            }
+            catch (Exception e)
+            {
+                result.Success = false;
+                result.Message += $"Error: Failed to query memory. Error was: {e.Message}";
+                _logger.LogError(result.Message);
+            }
+            return result;
+        }
+
+        public async Task<ResultObj> HistoryStore(HistoryStoreRequest? historyStoreRequest)
+        {
+            var result = new ResultObj();
+            result.Success = false;
+            result.Message = "MessageAPI: HistoryStore: ";
+            if (historyStoreRequest == null)
+            {
+                result.Message += "Error: historyStoreRequest is null.";
+                return result;
+            }
+
+            try
+            {
+                var historyResult = await _openSearchService.HistoryStoreAsync(historyStoreRequest);
+                result.Success = historyResult.Success;
+                result.Message += historyResult.Message;
+                _logger.LogInformation(result.Message);
+            }
+            catch (Exception e)
+            {
+                result.Success = false;
+                result.Message += $"Error: Failed to process history store message. Error was: {e.Message}";
+                _logger.LogError(result.Message);
+            }
+
+            return result;
+        }
+
+        public async Task<ResultObj> QueryMemoryTurnWindow(MemoryTurnWindowRequest? request)
+        {
+            var result = new ResultObj();
+            result.Success = false;
+            result.Message = "MessageAPI: QueryMemoryTurnWindow: ";
+            if (request == null)
+            {
+                result.Message += "Error: request is null.";
+                return result;
+            }
+
+            try
+            {
+                var queryResult = await _openSearchService.QueryMemoryTurnWindowAsync(request);
+                result.Success = queryResult.Success;
+                result.Message += queryResult.Message;
+                _logger.LogInformation(result.Message);
+            }
+            catch (Exception e)
+            {
+                result.Success = false;
+                result.Message += $"Error: Failed to query memory turn window. Error was: {e.Message}";
                 _logger.LogError(result.Message);
             }
             return result;
