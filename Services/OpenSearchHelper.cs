@@ -3,6 +3,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -28,6 +29,8 @@ public class OpenSearchHelper
     private readonly HttpClient _httpClient;
     private const string HistoryIndexName = "llm_history";
     private const string HistoryTurnsIndexName = "llm_history_turns";
+    private readonly ConcurrentDictionary<string, HashSet<string>> _currentVisibleTurnIdsBySession =
+        new(StringComparer.Ordinal);
 
     public Uri SearchUri => _modelParams.SearchUri;
 
@@ -1343,6 +1346,19 @@ public class OpenSearchHelper
                 };
             }).ToList();
 
+            if (!string.IsNullOrWhiteSpace(request.SessionId))
+            {
+                var visibleIds = new HashSet<string>(docs.Select(d => d.Id), StringComparer.Ordinal);
+                _currentVisibleTurnIdsBySession.AddOrUpdate(
+                    request.SessionId,
+                    _ => visibleIds,
+                    (_, _) => visibleIds);
+                _logger.LogDebug(
+                    "Updated current visible turns for session {SessionId}: count={Count}",
+                    request.SessionId,
+                    visibleIds.Count);
+            }
+
             var existing = await GetExistingHistoryTurnIdsAsync(indexName, docs.Select(d => d.Id).ToList());
             var created = 0;
             var skipped = 0;
@@ -1436,6 +1452,10 @@ public class OpenSearchHelper
             result.Message += response.Success
                 ? $"Deleted history turns for session {sessionId}."
                 : $"Delete by query failed: {response.DebugInformation}";
+            if (response.Success)
+            {
+                _currentVisibleTurnIdsBySession.TryRemove(sessionId, out _);
+            }
         }
         catch (Exception ex)
         {
@@ -1452,6 +1472,7 @@ public class OpenSearchHelper
         string indexName = "llm_history_turns",
         string userId = "",
         string sessionId = "",
+        string currentSessionId = "",
         int topK = 8,
         bool includeToolTurns = false,
         TimeSpan? requestTimeout = null,
@@ -1474,6 +1495,14 @@ public class OpenSearchHelper
         {
             filters.Add(new { term = new Dictionary<string, object> { ["session_id"] = sessionId } });
         }
+        HashSet<string>? currentVisibleTurnIds = null;
+        if (!string.IsNullOrWhiteSpace(currentSessionId))
+        {
+            _currentVisibleTurnIdsBySession.TryGetValue(currentSessionId, out currentVisibleTurnIds);
+        }
+        var currentVisibleCount = currentVisibleTurnIds?.Count ?? 0;
+        var candidateK = topK + currentVisibleCount;
+
         var mustNot = new List<object>();
         if (!includeToolTurns)
         {
@@ -1491,7 +1520,7 @@ public class OpenSearchHelper
 
         var requestBody = new
         {
-            size = topK,
+            size = candidateK,
             query = new
             {
                 knn = new Dictionary<string, object>
@@ -1499,7 +1528,7 @@ public class OpenSearchHelper
                     ["turn_embedding"] = new
                     {
                         vector = queryEmbedding,
-                        k = topK,
+                        k = candidateK,
                         filter = knnFilter
                     }
                 }
@@ -1518,18 +1547,29 @@ public class OpenSearchHelper
         var body = await response.Content.ReadAsStringAsync();
         var root = JObject.Parse(body);
         var hits = root["hits"]?["hits"] as JArray ?? new JArray();
-        var results = new List<MemoryQueryResult>(hits.Count);
-        var raw = new List<MemoryQueryResult>(hits.Count);
+        var results = new List<MemoryQueryResult>(topK);
+        var raw = new List<MemoryQueryResult>(topK);
 
         foreach (var hit in hits.OfType<JObject>())
         {
             var source = hit["_source"] as JObject;
             if (source == null) continue;
 
+            var hitSessionId = source["session_id"]?.Value<string>() ?? string.Empty;
+            var hitId = hit["_id"]?.Value<string>() ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(currentSessionId)
+                && string.Equals(hitSessionId, currentSessionId, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(hitId)
+                && currentVisibleTurnIds != null
+                && currentVisibleTurnIds.Contains(hitId))
+            {
+                continue;
+            }
+
             var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 ["index"] = hit["_index"]?.Value<string>() ?? string.Empty,
-                ["id"] = hit["_id"]?.Value<string>() ?? string.Empty
+                ["id"] = hitId
             };
 
             raw.Add(new MemoryQueryResult
@@ -1544,6 +1584,11 @@ public class OpenSearchHelper
                 Score = hit["_score"]?.Value<float>() ?? 0f,
                 Metadata = metadata
             });
+
+            if (raw.Count >= topK)
+            {
+                break;
+            }
         }
 
         await EnrichMemoryResultsWithContextAsync(raw, queryText, indexName, requestTimeout, cancellationToken);

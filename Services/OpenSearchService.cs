@@ -792,6 +792,9 @@ namespace NetworkMonitor.Search.Services
                     int padTokens = _minTokenLengthCap > 0 ? _minTokenLengthCap : 256;
                     int topK = memoryQueryRequest.TopK <= 0 ? 8 : Math.Clamp(memoryQueryRequest.TopK, 1, 50);
                     var timeout = ResolveQueryTimeout(MemoryTurnsIndex);
+                    var currentSessionId = string.IsNullOrWhiteSpace(memoryQueryRequest.SessionId)
+                        ? memoryQueryRequest.CurrentSessionId
+                        : string.Empty;
 
                     var memoryResults = await _openSearchHelper.SearchHistoryTurnsAsync(
                         memoryQueryRequest.QueryText,
@@ -799,6 +802,7 @@ namespace NetworkMonitor.Search.Services
                         MemoryTurnsIndex,
                         memoryQueryRequest.UserId,
                         memoryQueryRequest.SessionId,
+                        currentSessionId,
                         topK,
                         memoryQueryRequest.IncludeToolTurns,
                         timeout);
