@@ -986,34 +986,9 @@ public class OpenSearchHelper
 
     public async Task EnsureHistoryTurnsIndexExistsAsync()
     {
-        var exists = await _client.Indices.ExistsAsync(HistoryTurnsIndexName);
-        if (exists.Exists) return;
-
-        var mapping = @"
-{
-  ""settings"": { ""index"": { ""number_of_shards"": 1, ""number_of_replicas"": 1 } },
-  ""mappings"": {
-    ""properties"": {
-      ""service_id"": { ""type"": ""keyword"" },
-      ""session_id"": { ""type"": ""keyword"" },
-      ""user_id"": { ""type"": ""keyword"" },
-      ""start_unix_time"": { ""type"": ""long"" },
-      ""llm_type"": { ""type"": ""keyword"" },
-      ""turn_index"": { ""type"": ""integer"" },
-      ""role"": { ""type"": ""keyword"" },
-      ""turn_type"": { ""type"": ""keyword"" },
-      ""input"": { ""type"": ""text"" },
-      ""output"": { ""type"": ""text"" },
-      ""tool_name"": { ""type"": ""keyword"" },
-      ""tool_status"": { ""type"": ""keyword"" },
-      ""tool_call_id"": { ""type"": ""keyword"" },
-      ""updated_at"": { ""type"": ""date"" }
-    }
-  }
-}";
-        var create = await _client.LowLevel.Indices.CreateAsync<StringResponse>(HistoryTurnsIndexName, PostData.String(mapping));
-        if (!create.Success)
-            throw new InvalidOperationException($"Failed creating history turns index '{HistoryTurnsIndexName}': {create.DebugInformation}");
+        var ensureResult = await EnsureHistoryTurnsIndexExistsAsync(HistoryTurnsIndexName);
+        if (!ensureResult.Success)
+            throw new InvalidOperationException($"Failed creating history turns index '{HistoryTurnsIndexName}': {ensureResult.Message}");
     }
 
     public async Task<HistoryStoreResponse> GetHistoryAsync(HistoryStoreRequest request)
@@ -1505,28 +1480,27 @@ public class OpenSearchHelper
             mustNot.Add(new { term = new Dictionary<string, object> { ["role"] = "tool" } });
         }
 
+        var knnFilter = new
+        {
+            @bool = new
+            {
+                filter = filters,
+                must_not = mustNot
+            }
+        };
+
         var requestBody = new
         {
             size = topK,
             query = new
             {
-                @bool = new
+                knn = new Dictionary<string, object>
                 {
-                    filter = filters,
-                    must_not = mustNot,
-                    must = new object[]
+                    ["turn_embedding"] = new
                     {
-                        new
-                        {
-                            knn = new Dictionary<string, object>
-                            {
-                                ["turn_embedding"] = new
-                                {
-                                    vector = queryEmbedding,
-                                    k = topK
-                                }
-                            }
-                        }
+                        vector = queryEmbedding,
+                        k = topK,
+                        filter = knnFilter
                     }
                 }
             }
@@ -1537,7 +1511,8 @@ public class OpenSearchHelper
         var response = await PostWithTimeoutAsync($"/{indexName}/_search", content, requestTimeout, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
-            throw new Exception($"Memory search failed: {response.ReasonPhrase}");
+            var errorBody = await response.Content.ReadAsStringAsync();
+            throw new Exception($"Memory search failed: {(int)response.StatusCode} {response.ReasonPhrase}. Body: {errorBody}");
         }
 
         var body = await response.Content.ReadAsStringAsync();
