@@ -79,6 +79,13 @@ namespace NetworkMonitor.Search.Services
                 FuncName = "createSnapshot",
                 MessageTimeout = 60000
             });
+
+            _rabbitMQObjs.Add(new RabbitMQObj()
+            {
+                ExchangeName = "historyStore",
+                FuncName = "historyStore",
+                MessageTimeout = 60000
+            });
         }
 
         protected override async Task<ResultObj> DeclareConsumers()
@@ -396,3 +403,4 @@ namespace NetworkMonitor.Search.Services
 
 
 }
+

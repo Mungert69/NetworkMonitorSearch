@@ -205,8 +205,91 @@ namespace NetworkMonitor.Search.Services
             return Task.CompletedTask;
         }
 
-        // Store the dataSamples for use in embedding generator initialization
-        private IEnumerable<string>? _pendingDataSamples = null;
+        public async Task<HistoryStoreResponse> HandleHistoryStoreAsync(HistoryStoreRequest request)
+        {
+            if (request == null)
+            {
+                return new HistoryStoreResponse { Success = false, Message = "Request is null." };
+            }
+
+            if (EncryptHelper.IsBadKey(_llmEncryptKey, request.AuthKey, request.AppID))
+            {
+                _logger.LogWarning(
+                    "HistoryStore auth failed for app={AppID} operation={Operation} service={ServiceId} session={SessionId}",
+                    request.AppID,
+                    request.Operation,
+                    request.ServiceId,
+                    request.SessionId);
+                return new HistoryStoreResponse
+                {
+                    Success = false,
+                    Message = $"Failed history store request, bad AuthKey for AppID {request.AppID}"
+                };
+            }
+
+            try
+            {
+                _logger.LogInformation(
+                    "HistoryStore dispatch operation={Operation} service={ServiceId} session={SessionId} user={UserId} app={AppID} messageId={MessageID}",
+                    request.Operation,
+                    request.ServiceId,
+                    request.SessionId,
+                    request.UserId,
+                    request.AppID,
+                    request.MessageID);
+
+                var response = request.Operation switch
+                {
+                    HistoryStoreOperation.upsert => await _openSearchHelper.UpsertHistoryAsync(request),
+                    HistoryStoreOperation.get => await _openSearchHelper.GetHistoryAsync(request),
+                    HistoryStoreOperation.delete => await _openSearchHelper.DeleteHistoryAsync(request),
+                    HistoryStoreOperation.list => await _openSearchHelper.ListHistoryAsync(request),
+                    _ => new HistoryStoreResponse
+                    {
+                        Success = false,
+                        Message = $"Unsupported operation: {request.Operation}"
+                    }
+                };
+
+                response.MessageID = request.MessageID;
+                var responseExchange = string.IsNullOrWhiteSpace(request.ResponseExchange)
+                    ? $"{request.AppID}HistoryStoreResult"
+                    : request.ResponseExchange;
+                if (string.IsNullOrWhiteSpace(request.RoutingKey))
+                {
+                    await _rabbitRepo.PublishAsync(responseExchange, response);
+                }
+                else
+                {
+                    await _rabbitRepo.PublishAsync(responseExchange, response, request.RoutingKey);
+                }
+
+                _logger.LogInformation(
+                    "HistoryStore completed operation={Operation} service={ServiceId} session={SessionId} success={Success} responseExchange={ResponseExchange}",
+                    request.Operation,
+                    request.ServiceId,
+                    request.SessionId,
+                    response.Success,
+                    responseExchange);
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "HistoryStore failed operation={Operation} service={ServiceId} session={SessionId} app={AppID}",
+                    request.Operation,
+                    request.ServiceId,
+                    request.SessionId,
+                    request.AppID);
+                return new HistoryStoreResponse
+                {
+                    Success = false,
+                    Message = $"History store operation failed: {ex.GetType().Name}: {ex.Message}"
+                };
+            }
+        }
 
         // Store padToTokens per index
         private readonly Dictionary<string, int> _indexMaxTokens = new();
@@ -236,12 +319,17 @@ namespace NetworkMonitor.Search.Services
             var file = Path.Combine(configDir, $"{indexName}_padtokens.json");
             if (File.Exists(file))
             {
-                var obj = JsonConvert.DeserializeObject<dynamic>(File.ReadAllText(file));
-                int loaded = (int)obj.padToTokens;
+                var obj = JsonConvert.DeserializeObject<JObject>(File.ReadAllText(file));
+                if (obj == null)
+                    return (null, null);
+
+                int loaded = obj.Value<int?>("padToTokens") ?? _minTokenLengthCap;
                 int? actual = null;
                 try
                 {
-                    actual = obj.actualMaxTokens != null ? (int)obj.actualMaxTokens : (int?)null;
+                    actual = obj["actualMaxTokens"]?.Type == JTokenType.Null
+                        ? null
+                        : obj.Value<int?>("actualMaxTokens");
                 }
                 catch { }
                 _indexMaxTokens[indexName] = loaded;
@@ -517,7 +605,7 @@ namespace NetworkMonitor.Search.Services
             return result;
         }
 
-        public async Task<ResultObj> QueryIndexAsync(QueryIndexRequest queryIndexRequest)
+        public async Task<ResultObj> QueryIndexAsync(QueryIndexRequest? queryIndexRequest)
         {
             var result = new ResultObj();
             result.Success = true;
@@ -528,31 +616,31 @@ namespace NetworkMonitor.Search.Services
             {
                 result.Message += "Error: queryIndexRequest is null.";
                 result.Success = false;
-                queryIndexRequest = new QueryIndexRequest();
             }
-            queryIndexRequest.Success = false;
+            var request = queryIndexRequest ?? new QueryIndexRequest();
+            request.Success = false;
 
-            if (EncryptHelper.IsBadKey(_llmEncryptKey, queryIndexRequest.AuthKey, queryIndexRequest.AppID))
+            if (EncryptHelper.IsBadKey(_llmEncryptKey, request.AuthKey, request.AppID))
             {
                 //result.Success = false;
-                result.Message += $" Error : Failed QueryIndexAsync bad AuthKey for AppID {queryIndexRequest.AppID}";       
+                result.Message += $" Error : Failed QueryIndexAsync bad AuthKey for AppID {request.AppID}";
                 _logger.LogError(result.Message);
                 return result;
             }
 
-            if (string.IsNullOrWhiteSpace(queryIndexRequest.IndexName))
+            if (string.IsNullOrWhiteSpace(request.IndexName))
             {
                 result.Message += "Error: indexName is null or empty.";
                 result.Success = false;
 
             }
 
-            if (string.IsNullOrWhiteSpace(queryIndexRequest.QueryText))
+            if (string.IsNullOrWhiteSpace(request.QueryText))
             {
                 result.Message += "Error: queryText is null or empty.";
                 result.Success = false;
             }
-            string appID = queryIndexRequest?.AppID ?? "";
+            string appID = request.AppID ?? "";
             /*if (appID != "nmap" && appID != "meta")
             {
                 result.Message += $" Warning : not applying Rag for LLM type {appID} .";
@@ -562,45 +650,50 @@ namespace NetworkMonitor.Search.Services
             try
             {
                 var queryResults = new List<QueryResultObj>();
-                string cacheKey = $"query:{queryIndexRequest.IndexName}:{queryIndexRequest.QueryText}";
+                string cacheKey = $"query:{request.IndexName}:{request.QueryText}";
 
-                if (_cache.TryGetValue(cacheKey, out List<QueryResultObj> cachedResults))
+                if (_cache.TryGetValue(cacheKey, out List<QueryResultObj>? cachedResults))
                 {
-                    queryIndexRequest.QueryResults = cachedResults;
-                    queryIndexRequest.Success = true;
-                    result.Message += $"Cache hit for query on index '{queryIndexRequest.IndexName}'.";
+                    request.QueryResults = cachedResults ?? new List<QueryResultObj>();
+                    request.Success = true;
+                    result.Message += $"Cache hit for query on index '{request.IndexName}'.";
                 }
                 else
                 {
                     if (result.Success)
                     {
                         // Load the pad to tokens for this index
-                        var (padToTokens, _) = LoadIndexMaxTokens(queryIndexRequest.IndexName);
+                        var (padToTokens, _) = LoadIndexMaxTokens(request.IndexName);
                         int useMaxTokens = padToTokens ?? _minTokenLengthCap;
 
                         var targetUri = _openSearchHelper.SearchUri;
                         _logger.LogInformation(
                             "MessageAPI: QueryIndexAsync: connecting to OpenSearch at {Uri} for index {IndexName}",
                             targetUri,
-                            queryIndexRequest.IndexName);
-                        result.Message += $"Attempting OpenSearch query on '{targetUri}' for index '{queryIndexRequest.IndexName}'. ";
+                            request.IndexName);
+                        result.Message += $"Attempting OpenSearch query on '{targetUri}' for index '{request.IndexName}'. ";
 
                         var searchResponse = await _openSearchHelper.SearchDocumentsAsync(
-                            queryIndexRequest.QueryText,
-                            queryIndexRequest.IndexName,
+                            request.QueryText,
+                            request.IndexName,
                             useMaxTokens,
-                            queryIndexRequest.VectorSearchMode,
-                            ResolveQueryTimeout(queryIndexRequest.IndexName));
+                            request.VectorSearchMode,
+                            ResolveQueryTimeout(request.IndexName),
+                            userId: request.UserId,
+                            sessionId: request.SessionId,
+                            topK: request.TopK,
+                            includeToolTurns: request.IncludeToolTurns);
 
                         if (searchResponse != null)
                         {
-                            int hitCount = searchResponse.Hits?.HitsList?.Count ?? 0;
+                            var hitsList = searchResponse.Hits?.HitsList ?? new List<Hit>();
+                            int hitCount = hitsList.Count;
                             float maxScore = searchResponse.Hits?.MaxScore ?? 0;
                             int took = searchResponse.Took;
                             bool timedOut = searchResponse.TimedOut;
 
-                            var strategy = _strategies.FirstOrDefault(s => s.CanHandle(queryIndexRequest.IndexName));
-                            foreach (var hit in searchResponse.Hits.HitsList)
+                            var strategy = _strategies.FirstOrDefault(s => s.CanHandle(request.IndexName));
+                            foreach (var hit in hitsList)
                             {
                                 if (strategy != null)
                                     queryResults.Add(strategy.MapSearchHitToResult(hit));
@@ -613,41 +706,41 @@ namespace NetworkMonitor.Search.Services
                                         Metadata = new Dictionary<string, string>()
                                     });
                             }
-                            queryIndexRequest.Success = true;
-                            result.Message += $"Query executed successfully on index '{queryIndexRequest.IndexName}'. ";
+                            request.Success = true;
+                            result.Message += $"Query executed successfully on index '{request.IndexName}'. ";
                             result.Message += $"Hits: {hitCount}, MaxScore: {maxScore}, Took: {took}ms, TimedOut: {timedOut}.";
                         }
                     }
-                    queryIndexRequest.QueryResults = queryResults;
+                    request.QueryResults = queryResults;
                     // Cache the results forever (until service restart)
                     _cache.Set(cacheKey, queryResults);
                 }
-                queryIndexRequest.Message = result.Message;
-                var responseExchange = string.IsNullOrWhiteSpace(queryIndexRequest.ResponseExchange)
-                    ? $"{queryIndexRequest.AppID}QueryIndexResult"
-                    : queryIndexRequest.ResponseExchange;
+                request.Message = result.Message;
+                var responseExchange = string.IsNullOrWhiteSpace(request.ResponseExchange)
+                    ? $"{request.AppID}QueryIndexResult"
+                    : request.ResponseExchange;
 
-                if (string.IsNullOrEmpty(queryIndexRequest.RoutingKey))
+                if (string.IsNullOrEmpty(request.RoutingKey))
                 {
-                    await _rabbitRepo.PublishAsync<QueryIndexRequest>(responseExchange, queryIndexRequest);
+                    await _rabbitRepo.PublishAsync<QueryIndexRequest>(responseExchange, request);
                 }
                 else
                 {
-                    await _rabbitRepo.PublishAsync<QueryIndexRequest>(responseExchange, queryIndexRequest, queryIndexRequest.RoutingKey);
+                    await _rabbitRepo.PublishAsync<QueryIndexRequest>(responseExchange, request, request.RoutingKey);
                 }
-                result.Success = queryIndexRequest.Success;
-                result.Message += queryIndexRequest.Message;
+                result.Success = request.Success;
+                result.Message += request.Message;
             }
             catch (Exception ex)
             {
                 result.Success = false;
                 var targetUri = _openSearchHelper.SearchUri;
                 var failureStage = DescribeFailureStage(ex);
-                result.Message += $"Error during {failureStage} for index '{queryIndexRequest.IndexName}' targeting '{targetUri}': {ex.GetType().Name}: {ex.Message}";
+                result.Message += $"Error during {failureStage} for index '{request.IndexName}' targeting '{targetUri}': {ex.GetType().Name}: {ex.Message}";
                 _logger.LogError(ex,
                     "MessageAPI: QueryIndexAsync: error during {Stage} for index {IndexName} at {Uri}",
                     failureStage,
-                    queryIndexRequest.IndexName,
+                    request.IndexName,
                     targetUri);
             }
 

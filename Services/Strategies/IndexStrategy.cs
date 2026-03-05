@@ -631,12 +631,16 @@ public sealed class BlogIndexingStrategy : IndexingStrategyBase<BlogIndexDocumen
             metadata["index"] = hit.Index;
 
         var ext = hit.Source?.ExtensionData;
-        string input = ext != null && ext.TryGetValue("title", out var titleToken) ? titleToken?.ToString() : string.Empty;
-        string output = ext != null && ext.TryGetValue("summary", out var summaryToken) ? summaryToken?.ToString() : string.Empty;
+        var input = ext != null && ext.TryGetValue("title", out var titleToken)
+            ? titleToken?.ToString() ?? string.Empty
+            : string.Empty;
+        var output = ext != null && ext.TryGetValue("summary", out var summaryToken)
+            ? summaryToken?.ToString() ?? string.Empty
+            : string.Empty;
 
         // Optionally, fallback to content if summary is empty
         if (string.IsNullOrWhiteSpace(output) && ext != null && ext.TryGetValue("content", out var contentToken))
-            output = contentToken?.ToString();
+            output = contentToken?.ToString() ?? string.Empty;
 
         // Add all other fields to metadata
         if (ext != null)
@@ -650,8 +654,8 @@ public sealed class BlogIndexingStrategy : IndexingStrategyBase<BlogIndexDocumen
 
         return new QueryResultObj
         {
-            Input = input ?? string.Empty,
-            Output = output ?? string.Empty,
+            Input = input,
+            Output = output,
             Score = hit.Score,
             Metadata = metadata
         };

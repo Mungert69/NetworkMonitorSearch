@@ -180,7 +180,7 @@ public class NovitaApiClient
         }
 
         var parsed = JsonConvert.DeserializeObject<OpenAIEmbeddingResponse>(body);
-        return (parsed?.data?.FirstOrDefault()?.embedding ?? new List<float>(), false, null);
+        return (parsed?.data?.FirstOrDefault()?.embedding ?? new List<float>(), false, string.Empty);
     }
 
     private class OpenAIEmbeddingResponse
