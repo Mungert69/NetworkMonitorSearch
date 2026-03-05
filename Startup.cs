@@ -73,7 +73,17 @@ namespace NetworkMonitor.Search
             services.AddSingleton<IEmbeddingGenerator>(sp =>
             {
                 var factory = sp.GetRequiredService<IEmbeddingGeneratorFactory>();
-                return factory.Create();
+                var baseGenerator = factory.Create();
+                var mlParams = sp.GetRequiredService<MLParams>();
+                var logger = sp.GetRequiredService<ILogger<CachedEmbeddingGenerator>>();
+                var modelIdentity = $"{mlParams.EmbeddingProvider}|{mlParams.EmbeddingModelDir}|{mlParams.EmbeddingModelVecDim}";
+                return new CachedEmbeddingGenerator(
+                    baseGenerator,
+                    mlParams.OpenSearchUrl,
+                    mlParams.OpenSearchUser,
+                    mlParams.OpenSearchKey,
+                    modelIdentity,
+                    logger);
             });
 
           
