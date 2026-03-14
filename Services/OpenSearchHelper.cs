@@ -477,7 +477,11 @@ public class OpenSearchHelper
         string? userId = null,
         string? sessionId = null,
         int topK = 0,
-        bool includeToolTurns = false)
+        bool includeToolTurns = false,
+        bool includeMetadata = false,
+        string? anchorDocId = null,
+        string? anchorChunkId = null,
+        int neighborWindow = 0)
     {
         if (indexName.Equals(HistoryTurnsIndexName, StringComparison.OrdinalIgnoreCase))
         {
@@ -492,6 +496,7 @@ public class OpenSearchHelper
                 includeToolTurns);
         }
 
+        int size = topK > 0 ? Math.Clamp(topK, 1, 20) : (includeMetadata ? 6 : 3);
         var queryEmbedding = await GenerateEmbeddingAsync(queryText, padToTokens);
         var searchResponse = new SearchResponseObj();
 
@@ -506,7 +511,7 @@ public class OpenSearchHelper
         // Construct the k-NN search request body with dynamic field name
         var requestBody = new
         {
-            size = 3,
+            size,
             query = new
             {
                 knn = new Dictionary<string, object>
@@ -514,7 +519,7 @@ public class OpenSearchHelper
                     [vectorFieldName] = new
                     {
                         vector = queryEmbedding,
-                        k = 3
+                        k = size
                     }
                 }
             }
@@ -542,8 +547,173 @@ public class OpenSearchHelper
         {
             throw new Exception($"Search failed: {response.ReasonPhrase}");
         }
+
         if (searchResponse == null) searchResponse = new SearchResponseObj();
+
+        if (includeMetadata && neighborWindow > 0)
+        {
+            var baseHits = searchResponse.Hits?.HitsList ?? new List<Hit>();
+            if (baseHits.Count > 0)
+            {
+                Hit? anchorHit = await ResolveAnchorHitAsync(
+                    indexName,
+                    anchorDocId,
+                    anchorChunkId,
+                    requestTimeout,
+                    cancellationToken);
+
+                anchorHit ??= baseHits.FirstOrDefault();
+
+                if (TryGetLocator(anchorHit, out var resolvedDocId, out var resolvedChunkIndex))
+                {
+                    var neighbors = await FetchNeighborHitsAsync(
+                        indexName,
+                        resolvedDocId,
+                        resolvedChunkIndex,
+                        Math.Clamp(neighborWindow, 1, 8),
+                        requestTimeout,
+                        cancellationToken);
+
+                    if (neighbors.Count > 0)
+                    {
+                        var merged = new List<Hit>(baseHits.Count + neighbors.Count);
+                        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                        foreach (var hit in baseHits)
+                        {
+                            if (string.IsNullOrWhiteSpace(hit.Id) || seen.Add(hit.Id))
+                                merged.Add(hit);
+                        }
+
+                        foreach (var hit in neighbors)
+                        {
+                            if (string.IsNullOrWhiteSpace(hit.Id) || seen.Add(hit.Id))
+                                merged.Add(hit);
+                        }
+
+                        int limit = Math.Clamp(size + (Math.Clamp(neighborWindow, 1, 8) * 2), 1, 50);
+                        searchResponse.Hits ??= new Hits();
+                        searchResponse.Hits.HitsList = merged.Take(limit).ToList();
+                    }
+                }
+            }
+        }
+
         return searchResponse;
+    }
+
+    private async Task<Hit?> ResolveAnchorHitAsync(
+        string indexName,
+        string? anchorDocId,
+        string? anchorChunkId,
+        TimeSpan? requestTimeout,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(anchorChunkId))
+            return null;
+
+        var filters = new List<object>
+        {
+            new { term = new Dictionary<string, object> { ["chunk_id"] = anchorChunkId } }
+        };
+        if (!string.IsNullOrWhiteSpace(anchorDocId))
+        {
+            filters.Add(new { term = new Dictionary<string, object> { ["doc_id"] = anchorDocId } });
+        }
+
+        var requestBody = new
+        {
+            size = 1,
+            query = new
+            {
+                @bool = new
+                {
+                    filter = filters
+                }
+            }
+        };
+
+        var json = JsonConvert.SerializeObject(requestBody);
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
+        var response = await PostWithTimeoutAsync($"/{indexName}/_search", content, requestTimeout, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            return null;
+
+        var body = await response.Content.ReadAsStringAsync();
+        var parsed = JsonConvert.DeserializeObject<SearchResponseObj>(body);
+        return parsed?.Hits?.HitsList?.FirstOrDefault();
+    }
+
+    private async Task<List<Hit>> FetchNeighborHitsAsync(
+        string indexName,
+        string docId,
+        int chunkIndex,
+        int window,
+        TimeSpan? requestTimeout,
+        CancellationToken cancellationToken)
+    {
+        int minChunk = Math.Max(0, chunkIndex - window);
+        int maxChunk = chunkIndex + window;
+        int size = Math.Clamp((window * 2) + 1, 1, 25);
+
+        var requestBody = new
+        {
+            size,
+            sort = new object[]
+            {
+                new Dictionary<string, object> { ["chunk_index"] = new { order = "asc" } }
+            },
+            query = new
+            {
+                @bool = new
+                {
+                    filter = new object[]
+                    {
+                        new { term = new Dictionary<string, object> { ["doc_id"] = docId } },
+                        new
+                        {
+                            range = new Dictionary<string, object>
+                            {
+                                ["chunk_index"] = new { gte = minChunk, lte = maxChunk }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        var json = JsonConvert.SerializeObject(requestBody);
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
+        var response = await PostWithTimeoutAsync($"/{indexName}/_search", content, requestTimeout, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            return new List<Hit>();
+
+        var body = await response.Content.ReadAsStringAsync();
+        var parsed = JsonConvert.DeserializeObject<SearchResponseObj>(body);
+        return parsed?.Hits?.HitsList ?? new List<Hit>();
+    }
+
+    private static bool TryGetLocator(Hit? hit, out string docId, out int chunkIndex)
+    {
+        docId = string.Empty;
+        chunkIndex = -1;
+        if (hit?.Source?.ExtensionData == null)
+            return false;
+
+        if (!hit.Source.ExtensionData.TryGetValue("doc_id", out var docIdToken) || docIdToken == null)
+            return false;
+
+        if (!hit.Source.ExtensionData.TryGetValue("chunk_index", out var chunkIndexToken) || chunkIndexToken == null)
+            return false;
+
+        docId = docIdToken.ToString() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(docId))
+            return false;
+
+        if (!int.TryParse(chunkIndexToken.ToString(), out chunkIndex))
+            return false;
+
+        return chunkIndex >= 0;
     }
 
     private async Task<SearchResponseObj> SearchHistoryTurnsAsync(

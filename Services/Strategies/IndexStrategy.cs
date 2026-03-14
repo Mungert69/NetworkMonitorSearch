@@ -26,6 +26,11 @@ public interface IMultiVectorBook
     List<float> SummaryEmbedding { get; set; }
 }
 
+public interface IHasExtensionData
+{
+    IDictionary<string, JToken> ExtensionData { get; }
+}
+
 
 public interface IIndexingStrategy
 {
@@ -353,7 +358,21 @@ public abstract class MultiVectorBookIndexingStrategyBase<T> : IndexingStrategyB
     public override IEnumerable<string> GetFields(object item)
     {
         var book = (T)item; // Strongly typed
-        return new[] { book.Input, book.Output, book.Summary };
+        var fields = new List<string> { book.Input, book.Output, book.Summary };
+
+        if (book is IHasExtensionData ext && ext.ExtensionData != null)
+        {
+            foreach (var kvp in ext.ExtensionData)
+            {
+                if (kvp.Key.EndsWith("_embedding", StringComparison.OrdinalIgnoreCase)) continue;
+                if (kvp.Key.Equals("input", StringComparison.OrdinalIgnoreCase)) continue;
+                if (kvp.Key.Equals("output", StringComparison.OrdinalIgnoreCase)) continue;
+                if (kvp.Key.Equals("summary", StringComparison.OrdinalIgnoreCase)) continue;
+                fields.Add($"{kvp.Key}={kvp.Value?.ToString() ?? string.Empty}");
+            }
+        }
+
+        return fields;
     }
 
     public override async Task EnsureEmbeddingsAsync(object item, IEmbeddingGenerator generator, int padToTokens)
@@ -378,7 +397,7 @@ public abstract class MultiVectorBookIndexingStrategyBase<T> : IndexingStrategyB
     public override object BuildIndexDocument(object item)
     {
         var book = (T)item;
-        return new
+        var doc = JObject.FromObject(new
         {
             input = book.Input,
             output = book.Output,
@@ -386,7 +405,22 @@ public abstract class MultiVectorBookIndexingStrategyBase<T> : IndexingStrategyB
             input_embedding = book.InputEmbedding,
             output_embedding = book.OutputEmbedding,
             summary_embedding = book.SummaryEmbedding
-        };
+        });
+
+        if (book is IHasExtensionData ext && ext.ExtensionData != null)
+        {
+            foreach (var kvp in ext.ExtensionData)
+            {
+                if (kvp.Key.EndsWith("_embedding", StringComparison.OrdinalIgnoreCase)) continue;
+                if (kvp.Key.Equals("input", StringComparison.OrdinalIgnoreCase)) continue;
+                if (kvp.Key.Equals("output", StringComparison.OrdinalIgnoreCase)) continue;
+                if (kvp.Key.Equals("summary", StringComparison.OrdinalIgnoreCase)) continue;
+                if (kvp.Value is null) continue;
+                doc[kvp.Key] = kvp.Value.DeepClone();
+            }
+        }
+
+        return doc;
     }
 
     public override bool TryHydrateFromDocument(object item, JObject source)
@@ -456,7 +490,7 @@ public class Mitre
     public string Output { get; set; } = "";
     public List<float> Embedding { get; set; } = new();
 }
-public class SecurityBook : IMultiVectorBook
+public class SecurityBook : IMultiVectorBook, IHasExtensionData
 {
     public string Input { get; set; } = "";
     public string Output { get; set; } = "";
@@ -464,9 +498,11 @@ public class SecurityBook : IMultiVectorBook
     public List<float> InputEmbedding { get; set; } = new();
     public List<float> OutputEmbedding { get; set; } = new();
     public List<float> SummaryEmbedding { get; set; } = new();
+    [JsonExtensionData]
+    public IDictionary<string, JToken> ExtensionData { get; set; } = new Dictionary<string, JToken>(StringComparer.OrdinalIgnoreCase);
 }
 
-public class QuantumBook : IMultiVectorBook
+public class QuantumBook : IMultiVectorBook, IHasExtensionData
 {
     public string Input { get; set; } = "";
     public string Output { get; set; } = "";
@@ -474,6 +510,8 @@ public class QuantumBook : IMultiVectorBook
     public List<float> InputEmbedding { get; set; } = new();
     public List<float> OutputEmbedding { get; set; } = new();
     public List<float> SummaryEmbedding { get; set; } = new();
+    [JsonExtensionData]
+    public IDictionary<string, JToken> ExtensionData { get; set; } = new Dictionary<string, JToken>(StringComparer.OrdinalIgnoreCase);
 }
 
 public sealed class BlogIndexingStrategy : IndexingStrategyBase<BlogIndexDocument>

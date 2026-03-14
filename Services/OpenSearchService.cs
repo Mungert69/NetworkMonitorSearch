@@ -650,7 +650,8 @@ namespace NetworkMonitor.Search.Services
             try
             {
                 var queryResults = new List<QueryResultObj>();
-                string cacheKey = $"query:{request.IndexName}:{request.QueryText}";
+                string cacheKey =
+                    $"query:{request.IndexName}:{request.QueryText}:{request.VectorSearchMode}:{request.TopK}:{request.IncludeToolTurns}:{request.IncludeMetadata}:{request.UserId}:{request.SessionId}:{request.AnchorDocId}:{request.AnchorChunkId}:{request.NeighborWindow}";
 
                 if (_cache.TryGetValue(cacheKey, out List<QueryResultObj>? cachedResults))
                 {
@@ -682,7 +683,11 @@ namespace NetworkMonitor.Search.Services
                             userId: request.UserId,
                             sessionId: request.SessionId,
                             topK: request.TopK,
-                            includeToolTurns: request.IncludeToolTurns);
+                            includeToolTurns: request.IncludeToolTurns,
+                            includeMetadata: request.IncludeMetadata,
+                            anchorDocId: request.AnchorDocId,
+                            anchorChunkId: request.AnchorChunkId,
+                            neighborWindow: request.NeighborWindow);
 
                         if (searchResponse != null)
                         {
@@ -715,7 +720,10 @@ namespace NetworkMonitor.Search.Services
                     // Cache the results forever (until service restart)
                     _cache.Set(cacheKey, queryResults);
                 }
-                request.Message = result.Message;
+                request.Message = QueryResultFormatter.Format(
+                    request,
+                    request.QueryResults,
+                    request.Success ? null : result.Message);
                 var responseExchange = string.IsNullOrWhiteSpace(request.ResponseExchange)
                     ? $"{request.AppID}QueryIndexResult"
                     : request.ResponseExchange;
@@ -729,7 +737,7 @@ namespace NetworkMonitor.Search.Services
                     await _rabbitRepo.PublishAsync<QueryIndexRequest>(responseExchange, request, request.RoutingKey);
                 }
                 result.Success = request.Success;
-                result.Message += request.Message;
+                result.Message += $"Published query response payload for message '{request.MessageID}'.";
             }
             catch (Exception ex)
             {
