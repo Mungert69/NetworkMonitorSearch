@@ -50,7 +50,7 @@ public class NovitaEmbeddingGenerator : IEmbeddingGenerator
             try
             {
                 var result = await _client.GetEmbeddingAsync(
-                    _mlParams.LlmHFKey,
+                    _mlParams.LlmEmbedKey,
                     _mlParams.EmbeddingApiModel,
                     _mlParams.EmbeddingApiUrl,
                     Truncate(text, maxCap)

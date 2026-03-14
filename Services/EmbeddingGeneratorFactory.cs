@@ -24,8 +24,8 @@ namespace NetworkMonitor.Search.Services
         {
             if (_mlParams.EmbeddingProvider.ToLower() == "api")
             {
-                if (string.IsNullOrWhiteSpace(_mlParams.LlmHFKey))
-                    throw new Exception("LlmHFKey must be set in config for Novita embedding provider.");
+                if (string.IsNullOrWhiteSpace(_mlParams.LlmEmbedKey))
+                    throw new Exception("LlmEmbedKey must be set in config for API embedding provider.");
                 return new NovitaEmbeddingGenerator(
                     _mlParams,
                     _loggerFactory.CreateLogger<NovitaEmbeddingGenerator>(),
