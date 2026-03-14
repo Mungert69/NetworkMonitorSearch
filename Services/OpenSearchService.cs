@@ -651,7 +651,7 @@ namespace NetworkMonitor.Search.Services
             {
                 var queryResults = new List<QueryResultObj>();
                 string cacheKey =
-                    $"query:{request.IndexName}:{request.QueryText}:{request.VectorSearchMode}:{request.TopK}:{request.IncludeToolTurns}:{request.IncludeMetadata}:{request.UserId}:{request.SessionId}:{request.AnchorDocId}:{request.AnchorChunkId}:{request.NeighborWindow}";
+                    $"query:{request.IndexName}:{request.QueryText}:{request.VectorSearchMode}:{request.TopK}:{request.IncludeToolTurns}:{request.IncludeMetadata}:{request.UserId}:{request.SessionId}:{request.AnchorDocId}:{request.AnchorChunkId}:{request.NeighborWindow}:{request.FilterDocId}:{request.FilterChunkId}:{request.FilterSourceFile}:{request.FilterSectionPath}:{request.FilterPageStart}:{request.FilterPageEnd}:{request.FilterChunkIndexMin}:{request.FilterChunkIndexMax}";
 
                 if (_cache.TryGetValue(cacheKey, out List<QueryResultObj>? cachedResults))
                 {
@@ -687,7 +687,15 @@ namespace NetworkMonitor.Search.Services
                             includeMetadata: request.IncludeMetadata,
                             anchorDocId: request.AnchorDocId,
                             anchorChunkId: request.AnchorChunkId,
-                            neighborWindow: request.NeighborWindow);
+                            neighborWindow: request.NeighborWindow,
+                            filterDocId: request.FilterDocId,
+                            filterChunkId: request.FilterChunkId,
+                            filterSourceFile: request.FilterSourceFile,
+                            filterSectionPath: request.FilterSectionPath,
+                            filterPageStart: request.FilterPageStart,
+                            filterPageEnd: request.FilterPageEnd,
+                            filterChunkIndexMin: request.FilterChunkIndexMin,
+                            filterChunkIndexMax: request.FilterChunkIndexMax);
 
                         if (searchResponse != null)
                         {

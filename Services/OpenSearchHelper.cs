@@ -481,7 +481,15 @@ public class OpenSearchHelper
         bool includeMetadata = false,
         string? anchorDocId = null,
         string? anchorChunkId = null,
-        int neighborWindow = 0)
+        int neighborWindow = 0,
+        string? filterDocId = null,
+        string? filterChunkId = null,
+        string? filterSourceFile = null,
+        string? filterSectionPath = null,
+        int filterPageStart = 0,
+        int filterPageEnd = 0,
+        int filterChunkIndexMin = 0,
+        int filterChunkIndexMax = 0)
     {
         if (indexName.Equals(HistoryTurnsIndexName, StringComparison.OrdinalIgnoreCase))
         {
@@ -509,10 +517,20 @@ public class OpenSearchHelper
         string vectorFieldName = strategy.GetVectorField(mode);
 
         // Construct the k-NN search request body with dynamic field name
-        var requestBody = new
+        var metadataFilters = BuildMetadataFilters(
+            filterDocId,
+            filterChunkId,
+            filterSourceFile,
+            filterSectionPath,
+            filterPageStart,
+            filterPageEnd,
+            filterChunkIndexMin,
+            filterChunkIndexMax);
+
+        object queryObj;
+        if (metadataFilters.Count == 0)
         {
-            size,
-            query = new
+            queryObj = new
             {
                 knn = new Dictionary<string, object>
                 {
@@ -522,7 +540,37 @@ public class OpenSearchHelper
                         k = size
                     }
                 }
-            }
+            };
+        }
+        else
+        {
+            queryObj = new
+            {
+                @bool = new
+                {
+                    must = new object[]
+                    {
+                        new
+                        {
+                            knn = new Dictionary<string, object>
+                            {
+                                [vectorFieldName] = new
+                                {
+                                    vector = queryEmbedding,
+                                    k = size
+                                }
+                            }
+                        }
+                    },
+                    filter = metadataFilters
+                }
+            };
+        }
+
+        var requestBody = new
+        {
+            size,
+            query = queryObj
         };
 
         // Serialize the request body to JSON using Newtonsoft.Json
@@ -600,6 +648,55 @@ public class OpenSearchHelper
         }
 
         return searchResponse;
+    }
+
+    private static List<object> BuildMetadataFilters(
+        string? filterDocId,
+        string? filterChunkId,
+        string? filterSourceFile,
+        string? filterSectionPath,
+        int filterPageStart,
+        int filterPageEnd,
+        int filterChunkIndexMin,
+        int filterChunkIndexMax)
+    {
+        var filters = new List<object>();
+
+        if (!string.IsNullOrWhiteSpace(filterDocId))
+            filters.Add(new { term = new Dictionary<string, object> { ["doc_id"] = filterDocId } });
+        if (!string.IsNullOrWhiteSpace(filterChunkId))
+            filters.Add(new { term = new Dictionary<string, object> { ["chunk_id"] = filterChunkId } });
+        if (!string.IsNullOrWhiteSpace(filterSourceFile))
+            filters.Add(new { term = new Dictionary<string, object> { ["source_file"] = filterSourceFile } });
+        if (!string.IsNullOrWhiteSpace(filterSectionPath))
+            filters.Add(new { wildcard = new Dictionary<string, object> { ["section_path"] = $"*{filterSectionPath}*" } });
+
+        if (filterPageStart > 0 && filterPageEnd > 0)
+        {
+            // Overlap semantics: chunk window intersects requested page window.
+            filters.Add(new { range = new Dictionary<string, object> { ["page_start"] = new { lte = filterPageEnd } } });
+            filters.Add(new { range = new Dictionary<string, object> { ["page_end"] = new { gte = filterPageStart } } });
+        }
+        else if (filterPageStart > 0)
+        {
+            filters.Add(new { range = new Dictionary<string, object> { ["page_end"] = new { gte = filterPageStart } } });
+        }
+        else if (filterPageEnd > 0)
+        {
+            filters.Add(new { range = new Dictionary<string, object> { ["page_start"] = new { lte = filterPageEnd } } });
+        }
+
+        if (filterChunkIndexMin > 0 || filterChunkIndexMax > 0)
+        {
+            var chunkRange = new Dictionary<string, object>();
+            if (filterChunkIndexMin > 0)
+                chunkRange["gte"] = filterChunkIndexMin;
+            if (filterChunkIndexMax > 0)
+                chunkRange["lte"] = filterChunkIndexMax;
+            filters.Add(new { range = new Dictionary<string, object> { ["chunk_index"] = chunkRange } });
+        }
+
+        return filters;
     }
 
     private async Task<Hit?> ResolveAnchorHitAsync(

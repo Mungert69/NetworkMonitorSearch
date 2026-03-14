@@ -58,7 +58,10 @@ public class QueryResultFormatterTests
         Assert.Equal("query_result_v2", root.GetProperty("format").GetString());
         Assert.Equal("securitybooks", root.GetProperty("index_name").GetString());
         Assert.Equal("partial_or_full", root.GetProperty("locator_support").GetString());
+        Assert.Contains("anchor_doc_id", root.GetProperty("followup_parameters").ToString());
         Assert.Equal("rag_chunk", root.GetProperty("results")[0].GetProperty("source_type").GetString());
+        Assert.Equal("doc-1", root.GetProperty("results")[0].GetProperty("actionable").GetProperty("anchor_doc_id").GetString());
+        Assert.Equal("c-12", root.GetProperty("results")[0].GetProperty("actionable").GetProperty("anchor_chunk_id").GetString());
     }
 
     [Fact]

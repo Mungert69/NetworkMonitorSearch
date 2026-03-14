@@ -38,12 +38,31 @@ public static class QueryResultFormatter
             {
                 var metadata = item.Metadata ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 bool hasLocator = metadata.Keys.Any(LocatorKeys.Contains);
+                var actionable = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                if (metadata.TryGetValue("doc_id", out var docId) && !string.IsNullOrWhiteSpace(docId))
+                    actionable["anchor_doc_id"] = docId;
+                if (metadata.TryGetValue("chunk_id", out var chunkId) && !string.IsNullOrWhiteSpace(chunkId))
+                    actionable["anchor_chunk_id"] = chunkId;
+                if (metadata.TryGetValue("source_file", out var sourceFile) && !string.IsNullOrWhiteSpace(sourceFile))
+                    actionable["filter_source_file"] = sourceFile;
+                if (metadata.TryGetValue("section_path", out var sectionPath) && !string.IsNullOrWhiteSpace(sectionPath))
+                    actionable["filter_section_path"] = sectionPath;
+                if (metadata.TryGetValue("chunk_index", out var chunkIndex) && !string.IsNullOrWhiteSpace(chunkIndex))
+                {
+                    actionable["filter_chunk_index_min"] = chunkIndex;
+                    actionable["filter_chunk_index_max"] = chunkIndex;
+                }
+                if (metadata.TryGetValue("page_start", out var pageStart) && !string.IsNullOrWhiteSpace(pageStart))
+                    actionable["filter_page_start"] = pageStart;
+                if (metadata.TryGetValue("page_end", out var pageEnd) && !string.IsNullOrWhiteSpace(pageEnd))
+                    actionable["filter_page_end"] = pageEnd;
                 return new
                 {
                     input = item.Input ?? string.Empty,
                     output = item.Output ?? string.Empty,
                     score = item.Score,
                     source_type = hasLocator ? "rag_chunk" : "rag_text_only",
+                    actionable = actionable.Count > 0 ? actionable : null,
                     metadata = metadata.Count > 0 ? metadata : null
                 };
             }).ToList();
@@ -58,8 +77,22 @@ public static class QueryResultFormatter
                 result_count = shapedResults.Count,
                 locator_support = anyLocator ? "partial_or_full" : "none",
                 locator_note = anyLocator
-                    ? "Locator metadata is present for some or all results. Use anchor_doc_id/anchor_chunk_id for follow-up expansion."
+                    ? "Locator metadata is present for some or all results. Prefer actionable.anchor_doc_id/anchor_chunk_id for follow-up expansion and optional filter_* parameters for targeted narrowing."
                     : "This index returned semantic text results without locator metadata. This is common for FAQ and MITRE content.",
+                followup_parameters = new[]
+                {
+                    "anchor_doc_id",
+                    "anchor_chunk_id",
+                    "neighbor_window",
+                    "filter_doc_id",
+                    "filter_chunk_id",
+                    "filter_source_file",
+                    "filter_section_path",
+                    "filter_page_start",
+                    "filter_page_end",
+                    "filter_chunk_index_min",
+                    "filter_chunk_index_max"
+                },
                 anchor = new
                 {
                     anchor_doc_id = request.AnchorDocId,
