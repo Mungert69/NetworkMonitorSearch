@@ -537,7 +537,6 @@ public class OpenSearchHelper
         var strategy = StrategyForIndex(indexName);
         string vectorFieldName = strategy.GetVectorField(mode);
 
-        // Construct the k-NN search request body with dynamic field name
         var metadataFilters = BuildMetadataFilters(
             filterDocId,
             filterChunkId,
@@ -548,6 +547,63 @@ public class OpenSearchHelper
             filterChunkIndexMin,
             filterChunkIndexMax);
 
+        if (ShouldUseHybridRerank(indexName))
+        {
+            searchResponse = await SearchHybridWithRerankAsync(
+                queryText,
+                indexName,
+                vectorFieldName,
+                queryEmbedding,
+                size,
+                metadataFilters,
+                requestTimeout,
+                cancellationToken);
+        }
+        else
+        {
+            searchResponse = await SearchVectorOnlyAsync(
+                indexName,
+                vectorFieldName,
+                queryEmbedding,
+                size,
+                metadataFilters,
+                requestTimeout,
+                cancellationToken);
+        }
+
+        if (searchResponse == null) searchResponse = new SearchResponseObj();
+        await ExpandNeighborsIfRequestedAsync(
+            searchResponse,
+            indexName,
+            includeMetadata,
+            neighborWindow,
+            anchorDocId,
+            anchorChunkId,
+            size,
+            requestTimeout,
+            cancellationToken);
+
+        return searchResponse;
+    }
+
+    private bool ShouldUseHybridRerank(string indexName)
+    {
+        if (!_modelParams.HybridRerankEnabled)
+            return false;
+        if (_modelParams.HybridIndices == null || _modelParams.HybridIndices.Count == 0)
+            return false;
+        return _modelParams.HybridIndices.Contains(indexName);
+    }
+
+    private async Task<SearchResponseObj> SearchVectorOnlyAsync(
+        string indexName,
+        string vectorFieldName,
+        List<float> queryEmbedding,
+        int size,
+        List<object> metadataFilters,
+        TimeSpan? requestTimeout,
+        CancellationToken cancellationToken)
+    {
         object queryObj;
         if (metadataFilters.Count == 0)
         {
@@ -593,82 +649,235 @@ public class OpenSearchHelper
             size,
             query = queryObj
         };
+        return await ExecuteSearchAsync(indexName, requestBody, requestTimeout, cancellationToken);
+    }
 
-        // Serialize the request body to JSON using Newtonsoft.Json
-        var jsonContent = JsonConvert.SerializeObject(requestBody);
-        using var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+    private async Task<SearchResponseObj> SearchHybridWithRerankAsync(
+        string queryText,
+        string indexName,
+        string vectorFieldName,
+        List<float> queryEmbedding,
+        int size,
+        List<object> metadataFilters,
+        TimeSpan? requestTimeout,
+        CancellationToken cancellationToken)
+    {
+        int candidateMultiplier = Math.Clamp(_modelParams.HybridCandidateMultiplier, 2, 10);
+        int minCandidates = Math.Clamp(_modelParams.HybridMinCandidates, size, 100);
+        int candidateSize = Math.Clamp(Math.Max(size * candidateMultiplier, minCandidates), size, 100);
 
-        // Send the POST request to the specified index
-        var response = await PostWithTimeoutAsync($"/{indexName}/_search", content, requestTimeout, cancellationToken);
+        var vectorResponse = await SearchVectorOnlyAsync(
+            indexName,
+            vectorFieldName,
+            queryEmbedding,
+            candidateSize,
+            metadataFilters,
+            requestTimeout,
+            cancellationToken);
 
-        // Process the response
-        if (response.IsSuccessStatusCode)
+        var lexicalRequestBody = BuildLexicalRequestBody(queryText, candidateSize, metadataFilters);
+        var lexicalResponse = await ExecuteSearchAsync(indexName, lexicalRequestBody, requestTimeout, cancellationToken);
+
+        var vectorHits = vectorResponse.Hits?.HitsList ?? new List<Hit>();
+        var lexicalHits = lexicalResponse.Hits?.HitsList ?? new List<Hit>();
+        var reranked = RerankByRrf(vectorHits, lexicalHits, size);
+
+        return new SearchResponseObj
         {
-            var responseBody = await response.Content.ReadAsStringAsync();
-            // Console.WriteLine("Search Results:");
-            // Console.WriteLine(responseBody);
-
-            // Deserialize the JSON response into the SearchResponse object
-            searchResponse = JsonConvert.DeserializeObject<SearchResponseObj>(responseBody);
-
-        }
-        else
-        {
-            throw new Exception($"Search failed: {response.ReasonPhrase}");
-        }
-
-        if (searchResponse == null) searchResponse = new SearchResponseObj();
-
-        if (includeMetadata && neighborWindow > 0)
-        {
-            var baseHits = searchResponse.Hits?.HitsList ?? new List<Hit>();
-            if (baseHits.Count > 0)
+            Took = Math.Max(vectorResponse.Took, lexicalResponse.Took),
+            TimedOut = vectorResponse.TimedOut || lexicalResponse.TimedOut,
+            Shards = vectorResponse.Shards ?? lexicalResponse.Shards,
+            Hits = new Hits
             {
-                Hit? anchorHit = await ResolveAnchorHitAsync(
-                    indexName,
-                    anchorDocId,
-                    anchorChunkId,
-                    requestTimeout,
-                    cancellationToken);
+                HitsList = reranked,
+                MaxScore = reranked.Count > 0 ? reranked[0].Score : 0,
+                Total = vectorResponse.Hits?.Total
+                    ?? lexicalResponse.Hits?.Total
+                    ?? new Total { Value = reranked.Count, Relation = "eq" }
+            }
+        };
+    }
 
-                anchorHit ??= baseHits.FirstOrDefault();
-
-                if (TryGetLocator(anchorHit, out var resolvedDocId, out var resolvedChunkIndex))
+    private object BuildLexicalRequestBody(string queryText, int size, List<object> metadataFilters)
+    {
+        var mustClauses = new List<object>
+        {
+            new
+            {
+                multi_match = new
                 {
-                    var neighbors = await FetchNeighborHitsAsync(
-                        indexName,
-                        resolvedDocId,
-                        resolvedChunkIndex,
-                        Math.Clamp(neighborWindow, 1, 8),
-                        requestTimeout,
-                        cancellationToken);
-
-                    if (neighbors.Count > 0)
-                    {
-                        var merged = new List<Hit>(baseHits.Count + neighbors.Count);
-                        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                        foreach (var hit in baseHits)
-                        {
-                            if (string.IsNullOrWhiteSpace(hit.Id) || seen.Add(hit.Id))
-                                merged.Add(hit);
-                        }
-
-                        foreach (var hit in neighbors)
-                        {
-                            if (string.IsNullOrWhiteSpace(hit.Id) || seen.Add(hit.Id))
-                                merged.Add(hit);
-                        }
-
-                        int limit = Math.Clamp(size + (Math.Clamp(neighborWindow, 1, 8) * 2), 1, 50);
-                        searchResponse.Hits ??= new Hits();
-                        searchResponse.Hits.HitsList = merged.Take(limit).ToList();
-                    }
+                    query = queryText,
+                    fields = new[] { "input^2", "output^2", "summary^1.5" },
+                    type = "best_fields"
                 }
             }
+        };
+
+        if (metadataFilters.Count == 0)
+        {
+            return new
+            {
+                size,
+                query = new
+                {
+                    @bool = new
+                    {
+                        must = mustClauses
+                    }
+                }
+            };
         }
 
-        return searchResponse;
+        return new
+        {
+            size,
+            query = new
+            {
+                @bool = new
+                {
+                    must = mustClauses,
+                    filter = metadataFilters
+                }
+            }
+        };
+    }
+
+    private List<Hit> RerankByRrf(IReadOnlyList<Hit> vectorHits, IReadOnlyList<Hit> lexicalHits, int size)
+    {
+        int rrfK = Math.Clamp(_modelParams.HybridRrfK, 10, 200);
+        float vectorWeight = Math.Max(0.1f, _modelParams.HybridVectorWeight);
+        float lexicalWeight = Math.Max(0.1f, _modelParams.HybridLexicalWeight);
+
+        var merged = new Dictionary<string, Hit>(StringComparer.OrdinalIgnoreCase);
+        var fusedScores = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
+
+        for (int i = 0; i < vectorHits.Count; i++)
+        {
+            var hit = vectorHits[i];
+            var key = BuildHitKey(hit);
+            if (!merged.ContainsKey(key))
+                merged[key] = hit;
+            fusedScores[key] = fusedScores.TryGetValue(key, out var score)
+                ? score + (vectorWeight / (rrfK + i + 1))
+                : (vectorWeight / (rrfK + i + 1));
+        }
+
+        for (int i = 0; i < lexicalHits.Count; i++)
+        {
+            var hit = lexicalHits[i];
+            var key = BuildHitKey(hit);
+            if (!merged.ContainsKey(key))
+                merged[key] = hit;
+            fusedScores[key] = fusedScores.TryGetValue(key, out var score)
+                ? score + (lexicalWeight / (rrfK + i + 1))
+                : (lexicalWeight / (rrfK + i + 1));
+        }
+
+        return fusedScores
+            .OrderByDescending(kv => kv.Value)
+            .Take(size)
+            .Select(kv =>
+            {
+                var hit = merged[kv.Key];
+                hit.Score = kv.Value;
+                return hit;
+            })
+            .ToList();
+    }
+
+    private static string BuildHitKey(Hit hit)
+    {
+        if (!string.IsNullOrWhiteSpace(hit.Id))
+            return hit.Id;
+
+        var ext = hit.Source?.ExtensionData;
+        if (ext != null && ext.TryGetValue("chunk_id", out var chunkIdToken))
+        {
+            var chunkId = chunkIdToken?.ToString();
+            if (!string.IsNullOrWhiteSpace(chunkId))
+                return chunkId;
+        }
+
+        var input = hit.Source?.Input ?? string.Empty;
+        var output = hit.Source?.Output ?? string.Empty;
+        return $"{hit.Index}:{input}:{output}";
+    }
+
+    private async Task<SearchResponseObj> ExecuteSearchAsync(
+        string indexName,
+        object requestBody,
+        TimeSpan? requestTimeout,
+        CancellationToken cancellationToken)
+    {
+        var jsonContent = JsonConvert.SerializeObject(requestBody);
+        using var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+        var response = await PostWithTimeoutAsync($"/{indexName}/_search", content, requestTimeout, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw new Exception($"Search failed: {response.ReasonPhrase}");
+
+        var responseBody = await response.Content.ReadAsStringAsync();
+        return JsonConvert.DeserializeObject<SearchResponseObj>(responseBody) ?? new SearchResponseObj();
+    }
+
+    private async Task ExpandNeighborsIfRequestedAsync(
+        SearchResponseObj searchResponse,
+        string indexName,
+        bool includeMetadata,
+        int neighborWindow,
+        string? anchorDocId,
+        string? anchorChunkId,
+        int size,
+        TimeSpan? requestTimeout,
+        CancellationToken cancellationToken)
+    {
+        if (!includeMetadata || neighborWindow <= 0)
+            return;
+
+        var baseHits = searchResponse.Hits?.HitsList ?? new List<Hit>();
+        if (baseHits.Count == 0)
+            return;
+
+        Hit? anchorHit = await ResolveAnchorHitAsync(
+            indexName,
+            anchorDocId,
+            anchorChunkId,
+            requestTimeout,
+            cancellationToken);
+
+        anchorHit ??= baseHits.FirstOrDefault();
+
+        if (!TryGetLocator(anchorHit, out var resolvedDocId, out var resolvedChunkIndex))
+            return;
+
+        var neighbors = await FetchNeighborHitsAsync(
+            indexName,
+            resolvedDocId,
+            resolvedChunkIndex,
+            Math.Clamp(neighborWindow, 1, 8),
+            requestTimeout,
+            cancellationToken);
+
+        if (neighbors.Count == 0)
+            return;
+
+        var merged = new List<Hit>(baseHits.Count + neighbors.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var hit in baseHits)
+        {
+            if (string.IsNullOrWhiteSpace(hit.Id) || seen.Add(hit.Id))
+                merged.Add(hit);
+        }
+
+        foreach (var hit in neighbors)
+        {
+            if (string.IsNullOrWhiteSpace(hit.Id) || seen.Add(hit.Id))
+                merged.Add(hit);
+        }
+
+        int limit = Math.Clamp(size + (Math.Clamp(neighborWindow, 1, 8) * 2), 1, 50);
+        searchResponse.Hits ??= new Hits();
+        searchResponse.Hits.HitsList = merged.Take(limit).ToList();
     }
 
     private async Task<SearchResponseObj> SearchAnchorOrFilterOnlyAsync(

@@ -70,7 +70,16 @@ namespace NetworkMonitor.Search.Services
                 DefaultIndex = mlParams.OpenSearchDefaultIndex,
                 HttpTimeout = mlParams.OpenSearchHttpTimeoutSeconds > 0
                     ? TimeSpan.FromSeconds(mlParams.OpenSearchHttpTimeoutSeconds)
-                    : Timeout.InfiniteTimeSpan
+                    : Timeout.InfiniteTimeSpan,
+                HybridIndices = new HashSet<string>(
+                    mlParams.OpenSearchHybridIndices ?? new List<string>(),
+                    StringComparer.OrdinalIgnoreCase),
+                HybridRerankEnabled = mlParams.OpenSearchHybridRerankEnabled,
+                HybridCandidateMultiplier = mlParams.OpenSearchHybridCandidateMultiplier,
+                HybridMinCandidates = mlParams.OpenSearchHybridMinCandidates,
+                HybridRrfK = mlParams.OpenSearchHybridRrfK,
+                HybridVectorWeight = mlParams.OpenSearchHybridVectorWeight,
+                HybridLexicalWeight = mlParams.OpenSearchHybridLexicalWeight
                 // Add any other properties that need to be mapped
             };
             _llmThreads = mlParams.LlmThreads;
