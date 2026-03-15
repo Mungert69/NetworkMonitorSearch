@@ -79,7 +79,8 @@ namespace NetworkMonitor.Search.Services
                 HybridMinCandidates = mlParams.OpenSearchHybridMinCandidates,
                 HybridRrfK = mlParams.OpenSearchHybridRrfK,
                 HybridVectorWeight = mlParams.OpenSearchHybridVectorWeight,
-                HybridLexicalWeight = mlParams.OpenSearchHybridLexicalWeight
+                HybridLexicalWeight = mlParams.OpenSearchHybridLexicalWeight,
+                EnableAltQuestionFields = mlParams.OpenSearchEnableAltQuestionFields
                 // Add any other properties that need to be mapped
             };
             _llmThreads = mlParams.LlmThreads;
@@ -106,7 +107,7 @@ namespace NetworkMonitor.Search.Services
             {
                 new MitreIndexingStrategy(),
                 new DocumentIndexingStrategy(),
-                new SecurityBookIndexingStrategy(),
+                new SecurityBookIndexingStrategy(mlParams.OpenSearchEnableAltQuestionFields),
                 new QuantumBookIndexingStrategy(),
                 new BlogIndexingStrategy()
             };

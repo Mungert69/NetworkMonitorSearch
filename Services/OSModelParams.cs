@@ -20,6 +20,7 @@ public class OSModelParams{
     private int _hybridRrfK = 60;
     private float _hybridVectorWeight = 1.0f;
     private float _hybridLexicalWeight = 1.0f;
+    private bool _enableAltQuestionFields = false;
 
     public Uri SearchUri  => new Uri(_url);
 
@@ -41,4 +42,5 @@ public class OSModelParams{
     public int HybridRrfK { get => _hybridRrfK; set => _hybridRrfK = value; }
     public float HybridVectorWeight { get => _hybridVectorWeight; set => _hybridVectorWeight = value; }
     public float HybridLexicalWeight { get => _hybridLexicalWeight; set => _hybridLexicalWeight = value; }
+    public bool EnableAltQuestionFields { get => _enableAltQuestionFields; set => _enableAltQuestionFields = value; }
 }

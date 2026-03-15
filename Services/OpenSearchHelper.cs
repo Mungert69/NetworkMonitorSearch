@@ -700,6 +700,16 @@ public class OpenSearchHelper
 
     private object BuildLexicalRequestBody(string queryText, int size, List<object> metadataFilters)
     {
+        var lexicalFields = new List<string> { "input^2", "output^2", "summary^1.5" };
+        if (_modelParams.EnableAltQuestionFields)
+        {
+            // Fixed decay for alternates. best_fields + tie_breaker=0 prevents additive score inflation
+            // when a chunk has more alternate question fields populated.
+            lexicalFields.Add("alt_question_1^1.3");
+            lexicalFields.Add("alt_question_2^1.2");
+            lexicalFields.Add("alt_question_3^1.1");
+        }
+
         var mustClauses = new List<object>
         {
             new
@@ -707,8 +717,9 @@ public class OpenSearchHelper
                 multi_match = new
                 {
                     query = queryText,
-                    fields = new[] { "input^2", "output^2", "summary^1.5" },
-                    type = "best_fields"
+                    fields = lexicalFields,
+                    type = "best_fields",
+                    tie_breaker = 0.0
                 }
             }
         };

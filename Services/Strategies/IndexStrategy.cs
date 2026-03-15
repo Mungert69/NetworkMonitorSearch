@@ -336,6 +336,20 @@ public sealed class MitreIndexingStrategy : IndexingStrategyBase<Mitre>
 public abstract class MultiVectorBookIndexingStrategyBase<T> : IndexingStrategyBase<T>
     where T : class, IMultiVectorBook, new()
 {
+    private const string AltQuestion1Field = "alt_question_1";
+    private const string AltQuestion2Field = "alt_question_2";
+    private const string AltQuestion3Field = "alt_question_3";
+    private const string AltQuestion1EmbeddingField = "alt_question_1_embedding";
+    private const string AltQuestion2EmbeddingField = "alt_question_2_embedding";
+    private const string AltQuestion3EmbeddingField = "alt_question_3_embedding";
+
+    private readonly bool _enableAltQuestionFields;
+
+    protected MultiVectorBookIndexingStrategyBase(bool enableAltQuestionFields = false)
+    {
+        _enableAltQuestionFields = enableAltQuestionFields;
+    }
+
     public string ContentVectorFieldName => "output_embedding";
     public string QuestionVectorFieldName => "input_embedding";
     public string SummaryVectorFieldName => "summary_embedding";
@@ -348,12 +362,36 @@ public abstract class MultiVectorBookIndexingStrategyBase<T> : IndexingStrategyB
     };
 
     public override IReadOnlyDictionary<string, float> GetDefaultFieldWeights() =>
-        new Dictionary<string, float>
+        _enableAltQuestionFields
+            ? new Dictionary<string, float>
+            {
+                [QuestionVectorFieldName] = 1f,
+                [AltQuestion1EmbeddingField] = 0.9f,
+                [AltQuestion2EmbeddingField] = 0.8f,
+                [AltQuestion3EmbeddingField] = 0.7f,
+                [ContentVectorFieldName] = 1f,
+                [SummaryVectorFieldName] = 1f
+            }
+            : new Dictionary<string, float>
         {
             [QuestionVectorFieldName] = 1f,
             [ContentVectorFieldName] = 1f,
             [SummaryVectorFieldName] = 1f
         };
+
+    private static string? GetExtensionString(T book, string key)
+    {
+        if (book is not IHasExtensionData ext || ext.ExtensionData == null)
+            return null;
+
+        if (!ext.ExtensionData.TryGetValue(key, out var token) || token == null)
+            return null;
+
+        var value = token.Type == JTokenType.String ? token.Value<string>() : token.ToString();
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        return value.Trim();
+    }
 
     public override IEnumerable<string> GetFields(object item)
     {
@@ -390,6 +428,35 @@ public abstract class MultiVectorBookIndexingStrategyBase<T> : IndexingStrategyB
         await Ensure(() => book.InputEmbedding, e => book.InputEmbedding = e, book.Input);
         await Ensure(() => book.OutputEmbedding, e => book.OutputEmbedding = e, book.Output);
         await Ensure(() => book.SummaryEmbedding, e => book.SummaryEmbedding = e, book.Summary);
+
+        if (_enableAltQuestionFields && book is IHasExtensionData ext && ext.ExtensionData != null)
+        {
+            async Task EnsureAltEmbedding(string fieldName, string embeddingFieldName)
+            {
+                var altText = GetExtensionString(book, fieldName);
+                if (string.IsNullOrWhiteSpace(altText))
+                {
+                    ext.ExtensionData.Remove(embeddingFieldName);
+                    return;
+                }
+
+                if (ext.ExtensionData.TryGetValue(embeddingFieldName, out var existingToken) &&
+                    existingToken is JArray existingArray &&
+                    existingArray.Count > 0)
+                {
+                    return;
+                }
+
+                var emb = await generator.GenerateEmbeddingAsync(altText, padToTokens);
+                if (emb.Count == 0)
+                    return;
+                ext.ExtensionData[embeddingFieldName] = JArray.FromObject(emb);
+            }
+
+            await EnsureAltEmbedding(AltQuestion1Field, AltQuestion1EmbeddingField);
+            await EnsureAltEmbedding(AltQuestion2Field, AltQuestion2EmbeddingField);
+            await EnsureAltEmbedding(AltQuestion3Field, AltQuestion3EmbeddingField);
+        }
     }
 
     public override string ComputeId(object item) => IdHelper.Sha256(((T)item).Output);
@@ -411,7 +478,16 @@ public abstract class MultiVectorBookIndexingStrategyBase<T> : IndexingStrategyB
         {
             foreach (var kvp in ext.ExtensionData)
             {
-                if (kvp.Key.EndsWith("_embedding", StringComparison.OrdinalIgnoreCase)) continue;
+                if (kvp.Key.EndsWith("_embedding", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!_enableAltQuestionFields ||
+                        !(kvp.Key.Equals(AltQuestion1EmbeddingField, StringComparison.OrdinalIgnoreCase) ||
+                          kvp.Key.Equals(AltQuestion2EmbeddingField, StringComparison.OrdinalIgnoreCase) ||
+                          kvp.Key.Equals(AltQuestion3EmbeddingField, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        continue;
+                    }
+                }
                 if (kvp.Key.Equals("input", StringComparison.OrdinalIgnoreCase)) continue;
                 if (kvp.Key.Equals("output", StringComparison.OrdinalIgnoreCase)) continue;
                 if (kvp.Key.Equals("summary", StringComparison.OrdinalIgnoreCase)) continue;
@@ -447,7 +523,22 @@ public abstract class MultiVectorBookIndexingStrategyBase<T> : IndexingStrategyB
                book.SummaryEmbedding.Count > 0;
     }
 
-    public override string GetIndexMapping(int dim) => $@"
+    public override string GetIndexMapping(int dim)
+    {
+        var altFields = _enableAltQuestionFields
+            ? $@",
+      ""alt_question_1"": {{ ""type"": ""text"" }},
+      ""alt_question_2"": {{ ""type"": ""text"" }},
+      ""alt_question_3"": {{ ""type"": ""text"" }},
+      ""alt_question_1_embedding"" : {{ ""type"": ""knn_vector"", ""dimension"": {dim},
+                                       ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }},
+      ""alt_question_2_embedding"" : {{ ""type"": ""knn_vector"", ""dimension"": {dim},
+                                       ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }},
+      ""alt_question_3_embedding"" : {{ ""type"": ""knn_vector"", ""dimension"": {dim},
+                                       ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }}"
+            : "";
+
+        return $@"
 {{
   ""settings"": {{ ""index"": {{ ""knn"": true }} }},
   ""mappings"": {{
@@ -460,14 +551,20 @@ public abstract class MultiVectorBookIndexingStrategyBase<T> : IndexingStrategyB
       ""output_embedding"" : {{ ""type"": ""knn_vector"", ""dimension"": {dim},
                                ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }},
       ""summary_embedding"" : {{ ""type"": ""knn_vector"", ""dimension"": {dim},
-                                ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }}
+                                ""method"": {{ ""name"": ""hnsw"", ""space_type"": ""l2"", ""engine"": ""faiss"" }} }}{altFields}
     }}
   }}
 }}";
+    }
 }
 
 public sealed class SecurityBookIndexingStrategy : MultiVectorBookIndexingStrategyBase<SecurityBook>
 {
+    public SecurityBookIndexingStrategy(bool enableAltQuestionFields = false)
+        : base(enableAltQuestionFields)
+    {
+    }
+
     public override string IndexName => "securitybooks";
 }
 
