@@ -12,6 +12,7 @@ public class OpenSearchHelperMetadataFiltersTests
         string? filterDocId = null,
         string? filterChunkId = null,
         string? filterSourceFile = null,
+        string? filterSectionPath = null,
         int filterPageStart = 0,
         int filterPageEnd = 0,
         int filterChunkIndexMin = 0,
@@ -28,6 +29,7 @@ public class OpenSearchHelperMetadataFiltersTests
             filterDocId,
             filterChunkId,
             filterSourceFile,
+            filterSectionPath,
             filterPageStart,
             filterPageEnd,
             filterChunkIndexMin,
@@ -45,6 +47,7 @@ public class OpenSearchHelperMetadataFiltersTests
             filterDocId: "doc-abc",
             filterChunkId: "chunk-007",
             filterSourceFile: "book.json",
+            filterSectionPath: "Part I",
             filterPageStart: 120,
             filterPageEnd: 140,
             filterChunkIndexMin: 30,
@@ -59,6 +62,8 @@ public class OpenSearchHelperMetadataFiltersTests
         Assert.Contains("\"chunk_id.keyword\"", json, StringComparison.Ordinal);
         Assert.Contains("\"source_file\"", json, StringComparison.Ordinal);
         Assert.Contains("\"source_file.keyword\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"section_path\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"section_path.keyword\"", json, StringComparison.Ordinal);
 
         // Overlap semantics for page windows:
         // page_start <= filterPageEnd and page_end >= filterPageStart

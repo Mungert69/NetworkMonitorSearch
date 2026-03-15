@@ -19,13 +19,6 @@ public static class QueryResultFormatter
         "page_end"
     };
 
-    private static readonly HashSet<string> SuppressedMetadataKeys = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "section_path",
-        "prev_chunk_id",
-        "next_chunk_id"
-    };
-
     public static string Format(QueryIndexRequest request, IReadOnlyList<QueryResultObj>? queryResults, string? fallbackMessage = null)
     {
         var results = queryResults ?? Array.Empty<QueryResultObj>();
@@ -42,7 +35,6 @@ public static class QueryResultFormatter
             {
                 var rawMetadata = item.Metadata ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 var metadata = rawMetadata
-                    .Where(kvp => !SuppressedMetadataKeys.Contains(kvp.Key))
                     .ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.OrdinalIgnoreCase);
                 bool hasLocator = metadata.Keys.Any(LocatorKeys.Contains);
                 var actionable = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -52,6 +44,8 @@ public static class QueryResultFormatter
                     actionable["anchor_chunk_id"] = chunkId;
                 if (metadata.TryGetValue("source_file", out var sourceFile) && !string.IsNullOrWhiteSpace(sourceFile))
                     actionable["filter_source_file"] = sourceFile;
+                if (metadata.TryGetValue("section_path", out var sectionPath) && !string.IsNullOrWhiteSpace(sectionPath))
+                    actionable["filter_section_path"] = sectionPath;
                 if (metadata.TryGetValue("chunk_index", out var chunkIndex) && !string.IsNullOrWhiteSpace(chunkIndex))
                 {
                     actionable["filter_chunk_index_min"] = chunkIndex;
@@ -92,6 +86,7 @@ public static class QueryResultFormatter
                     "filter_doc_id",
                     "filter_chunk_id",
                     "filter_source_file",
+                    "filter_section_path",
                     "filter_page_start",
                     "filter_page_end",
                     "filter_chunk_index_min",

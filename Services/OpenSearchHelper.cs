@@ -485,6 +485,7 @@ public class OpenSearchHelper
         string? filterDocId = null,
         string? filterChunkId = null,
         string? filterSourceFile = null,
+        string? filterSectionPath = null,
         int filterPageStart = 0,
         int filterPageEnd = 0,
         int filterChunkIndexMin = 0,
@@ -517,6 +518,7 @@ public class OpenSearchHelper
                 filterDocId,
                 filterChunkId,
                 filterSourceFile,
+                filterSectionPath,
                 filterPageStart,
                 filterPageEnd,
                 filterChunkIndexMin,
@@ -540,6 +542,7 @@ public class OpenSearchHelper
             filterDocId,
             filterChunkId,
             filterSourceFile,
+            filterSectionPath,
             filterPageStart,
             filterPageEnd,
             filterChunkIndexMin,
@@ -680,6 +683,7 @@ public class OpenSearchHelper
         string? filterDocId,
         string? filterChunkId,
         string? filterSourceFile,
+        string? filterSectionPath,
         int filterPageStart,
         int filterPageEnd,
         int filterChunkIndexMin,
@@ -734,6 +738,7 @@ public class OpenSearchHelper
             filterDocId,
             filterChunkId,
             filterSourceFile,
+            filterSectionPath,
             filterPageStart,
             filterPageEnd,
             filterChunkIndexMin,
@@ -772,6 +777,7 @@ public class OpenSearchHelper
         string? filterDocId,
         string? filterChunkId,
         string? filterSourceFile,
+        string? filterSectionPath,
         int filterPageStart,
         int filterPageEnd,
         int filterChunkIndexMin,
@@ -785,6 +791,8 @@ public class OpenSearchHelper
             filters.Add(BuildExactTermFilter("chunk_id", filterChunkId));
         if (!string.IsNullOrWhiteSpace(filterSourceFile))
             filters.Add(BuildExactTermFilter("source_file", filterSourceFile));
+        if (!string.IsNullOrWhiteSpace(filterSectionPath))
+            filters.Add(BuildExactTermFilter("section_path", filterSectionPath));
 
         if (filterPageStart > 0 && filterPageEnd > 0)
         {
