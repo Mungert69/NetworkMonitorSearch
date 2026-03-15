@@ -485,7 +485,6 @@ public class OpenSearchHelper
         string? filterDocId = null,
         string? filterChunkId = null,
         string? filterSourceFile = null,
-        string? filterSectionPath = null,
         int filterPageStart = 0,
         int filterPageEnd = 0,
         int filterChunkIndexMin = 0,
@@ -502,6 +501,26 @@ public class OpenSearchHelper
                 sessionId,
                 topK,
                 includeToolTurns);
+        }
+
+        if (string.IsNullOrWhiteSpace(queryText))
+        {
+            return await SearchAnchorOrFilterOnlyAsync(
+                indexName,
+                topK,
+                requestTimeout,
+                cancellationToken,
+                includeMetadata,
+                anchorDocId,
+                anchorChunkId,
+                neighborWindow,
+                filterDocId,
+                filterChunkId,
+                filterSourceFile,
+                filterPageStart,
+                filterPageEnd,
+                filterChunkIndexMin,
+                filterChunkIndexMax);
         }
 
         int size = topK > 0 ? Math.Clamp(topK, 1, 20) : (includeMetadata ? 6 : 3);
@@ -521,7 +540,6 @@ public class OpenSearchHelper
             filterDocId,
             filterChunkId,
             filterSourceFile,
-            filterSectionPath,
             filterPageStart,
             filterPageEnd,
             filterChunkIndexMin,
@@ -650,11 +668,110 @@ public class OpenSearchHelper
         return searchResponse;
     }
 
+    private async Task<SearchResponseObj> SearchAnchorOrFilterOnlyAsync(
+        string indexName,
+        int topK,
+        TimeSpan? requestTimeout,
+        CancellationToken cancellationToken,
+        bool includeMetadata,
+        string? anchorDocId,
+        string? anchorChunkId,
+        int neighborWindow,
+        string? filterDocId,
+        string? filterChunkId,
+        string? filterSourceFile,
+        int filterPageStart,
+        int filterPageEnd,
+        int filterChunkIndexMin,
+        int filterChunkIndexMax)
+    {
+        int size = topK > 0 ? Math.Clamp(topK, 1, 20) : (includeMetadata ? 6 : 3);
+        var searchResponse = new SearchResponseObj();
+
+        if (includeMetadata && neighborWindow > 0 && !string.IsNullOrWhiteSpace(anchorChunkId))
+        {
+            var anchorHit = await ResolveAnchorHitAsync(
+                indexName,
+                anchorDocId,
+                anchorChunkId,
+                requestTimeout,
+                cancellationToken);
+
+            if (TryGetLocator(anchorHit, out var resolvedDocId, out var resolvedChunkIndex))
+            {
+                var neighbors = await FetchNeighborHitsAsync(
+                    indexName,
+                    resolvedDocId,
+                    resolvedChunkIndex,
+                    Math.Clamp(neighborWindow, 1, 8),
+                    requestTimeout,
+                    cancellationToken);
+
+                var merged = new List<Hit>();
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                if (anchorHit != null && (string.IsNullOrWhiteSpace(anchorHit.Id) || seen.Add(anchorHit.Id)))
+                    merged.Add(anchorHit);
+
+                foreach (var hit in neighbors)
+                {
+                    if (string.IsNullOrWhiteSpace(hit.Id) || seen.Add(hit.Id))
+                        merged.Add(hit);
+                }
+
+                searchResponse.Hits = new Hits
+                {
+                    HitsList = merged.Take(Math.Clamp(size + (Math.Clamp(neighborWindow, 1, 8) * 2), 1, 50)).ToList(),
+                    MaxScore = 0
+                };
+                searchResponse.Took = 0;
+                searchResponse.TimedOut = false;
+                return searchResponse;
+            }
+        }
+
+        var metadataFilters = BuildMetadataFilters(
+            filterDocId,
+            filterChunkId,
+            filterSourceFile,
+            filterPageStart,
+            filterPageEnd,
+            filterChunkIndexMin,
+            filterChunkIndexMax);
+
+        if (metadataFilters.Count == 0)
+            return searchResponse;
+
+        var requestBody = new
+        {
+            size,
+            sort = new object[]
+            {
+                new Dictionary<string, object> { ["chunk_index"] = new { order = "asc" } }
+            },
+            query = new
+            {
+                @bool = new
+                {
+                    filter = metadataFilters
+                }
+            }
+        };
+
+        var jsonContent = JsonConvert.SerializeObject(requestBody);
+        using var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+        var response = await PostWithTimeoutAsync($"/{indexName}/_search", content, requestTimeout, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            return searchResponse;
+
+        var responseBody = await response.Content.ReadAsStringAsync();
+        return JsonConvert.DeserializeObject<SearchResponseObj>(responseBody) ?? new SearchResponseObj();
+    }
+
     private static List<object> BuildMetadataFilters(
         string? filterDocId,
         string? filterChunkId,
         string? filterSourceFile,
-        string? filterSectionPath,
         int filterPageStart,
         int filterPageEnd,
         int filterChunkIndexMin,
@@ -663,13 +780,11 @@ public class OpenSearchHelper
         var filters = new List<object>();
 
         if (!string.IsNullOrWhiteSpace(filterDocId))
-            filters.Add(new { term = new Dictionary<string, object> { ["doc_id"] = filterDocId } });
+            filters.Add(BuildExactTermFilter("doc_id", filterDocId));
         if (!string.IsNullOrWhiteSpace(filterChunkId))
-            filters.Add(new { term = new Dictionary<string, object> { ["chunk_id"] = filterChunkId } });
+            filters.Add(BuildExactTermFilter("chunk_id", filterChunkId));
         if (!string.IsNullOrWhiteSpace(filterSourceFile))
-            filters.Add(new { term = new Dictionary<string, object> { ["source_file"] = filterSourceFile } });
-        if (!string.IsNullOrWhiteSpace(filterSectionPath))
-            filters.Add(new { wildcard = new Dictionary<string, object> { ["section_path"] = $"*{filterSectionPath}*" } });
+            filters.Add(BuildExactTermFilter("source_file", filterSourceFile));
 
         if (filterPageStart > 0 && filterPageEnd > 0)
         {
@@ -699,6 +814,22 @@ public class OpenSearchHelper
         return filters;
     }
 
+    private static object BuildExactTermFilter(string field, string value)
+    {
+        return new
+        {
+            @bool = new
+            {
+                should = new object[]
+                {
+                    new { term = new Dictionary<string, object> { [field] = value } },
+                    new { term = new Dictionary<string, object> { [$"{field}.keyword"] = value } }
+                },
+                minimum_should_match = 1
+            }
+        };
+    }
+
     private async Task<Hit?> ResolveAnchorHitAsync(
         string indexName,
         string? anchorDocId,
@@ -711,11 +842,11 @@ public class OpenSearchHelper
 
         var filters = new List<object>
         {
-            new { term = new Dictionary<string, object> { ["chunk_id"] = anchorChunkId } }
+            BuildExactTermFilter("chunk_id", anchorChunkId)
         };
         if (!string.IsNullOrWhiteSpace(anchorDocId))
         {
-            filters.Add(new { term = new Dictionary<string, object> { ["doc_id"] = anchorDocId } });
+            filters.Add(BuildExactTermFilter("doc_id", anchorDocId));
         }
 
         var requestBody = new

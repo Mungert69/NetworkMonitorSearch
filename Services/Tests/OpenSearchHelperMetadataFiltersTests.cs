@@ -12,7 +12,6 @@ public class OpenSearchHelperMetadataFiltersTests
         string? filterDocId = null,
         string? filterChunkId = null,
         string? filterSourceFile = null,
-        string? filterSectionPath = null,
         int filterPageStart = 0,
         int filterPageEnd = 0,
         int filterChunkIndexMin = 0,
@@ -29,7 +28,6 @@ public class OpenSearchHelperMetadataFiltersTests
             filterDocId,
             filterChunkId,
             filterSourceFile,
-            filterSectionPath,
             filterPageStart,
             filterPageEnd,
             filterChunkIndexMin,
@@ -41,13 +39,12 @@ public class OpenSearchHelperMetadataFiltersTests
     }
 
     [Fact]
-    public void BuildMetadataFilters_WithSectionPathAndRanges_CreatesExpectedClauses()
+    public void BuildMetadataFilters_WithExactFieldsAndRanges_CreatesExpectedClauses()
     {
         var filters = InvokeBuildMetadataFilters(
             filterDocId: "doc-abc",
             filterChunkId: "chunk-007",
             filterSourceFile: "book.json",
-            filterSectionPath: "Chapter 7",
             filterPageStart: 120,
             filterPageEnd: 140,
             filterChunkIndexMin: 30,
@@ -57,10 +54,11 @@ public class OpenSearchHelperMetadataFiltersTests
         var json = JsonConvert.SerializeObject(list);
 
         Assert.Contains("\"doc_id\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"doc_id.keyword\"", json, StringComparison.Ordinal);
         Assert.Contains("\"chunk_id\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"chunk_id.keyword\"", json, StringComparison.Ordinal);
         Assert.Contains("\"source_file\"", json, StringComparison.Ordinal);
-        Assert.Contains("\"section_path\"", json, StringComparison.Ordinal);
-        Assert.Contains("*Chapter 7*", json, StringComparison.Ordinal);
+        Assert.Contains("\"source_file.keyword\"", json, StringComparison.Ordinal);
 
         // Overlap semantics for page windows:
         // page_start <= filterPageEnd and page_end >= filterPageStart
@@ -75,14 +73,12 @@ public class OpenSearchHelperMetadataFiltersTests
     }
 
     [Fact]
-    public void BuildMetadataFilters_WithOnlySectionPath_CreatesSingleWildcardClause()
+    public void BuildMetadataFilters_WithNoInputs_ReturnsEmptyFilterSet()
     {
-        var filters = InvokeBuildMetadataFilters(filterSectionPath: "Appendix");
+        var filters = InvokeBuildMetadataFilters();
         var list = Assert.IsAssignableFrom<IEnumerable>(filters);
         var json = JsonConvert.SerializeObject(list);
 
-        Assert.Contains("\"section_path\"", json, StringComparison.Ordinal);
-        Assert.Contains("*Appendix*", json, StringComparison.Ordinal);
+        Assert.Equal("[]", json);
     }
 }
-
