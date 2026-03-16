@@ -120,10 +120,15 @@ namespace NetworkMonitor.Search.Services
 
             // Log all parameters read in the constructor
             _logger.LogInformation(
-                $"OpenSearchService initialized with: EmbeddingModelDir={_modelParams.EmbeddingModelDir}\nEmbeddingModelVecDim={_modelParams.EmbeddingModelVecDim}\nOpenSearchUser={_modelParams.User}\n" +
-                $"OpenSearchUrl={_modelParams.Url}\nMaxTokenLengthCap={_maxTokenLengthCap}\nMinTokenLengthCap={_minTokenLengthCap}\n" +
-                $"OpenSearchDefaultIndex={_modelParams.DefaultIndex}\nDataDir={_dataDir}\nLlmThreads={_llmThreads}\n"
-            );
+                "OpenSearchService initialized with EmbeddingModelDir={EmbeddingModelDir}, EmbeddingModelVecDim={EmbeddingModelVecDim}, OpenSearchUrl={OpenSearchUrl}, MaxTokenLengthCap={MaxTokenLengthCap}, MinTokenLengthCap={MinTokenLengthCap}, OpenSearchDefaultIndex={OpenSearchDefaultIndex}, DataDir={DataDir}, LlmThreads={LlmThreads}. Secrets redacted.",
+                _modelParams.EmbeddingModelDir,
+                _modelParams.EmbeddingModelVecDim,
+                _modelParams.Url,
+                _maxTokenLengthCap,
+                _minTokenLengthCap,
+                _modelParams.DefaultIndex,
+                _dataDir,
+                _llmThreads);
         }
 
         // Create a snapshot for the given indices
