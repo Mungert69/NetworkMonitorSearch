@@ -8,12 +8,19 @@ CONFIG="Release-Dev"
 
 TAG="$(sed -n 's/.*<ContainerImageTag>\(.*\)<\/ContainerImageTag>.*/\1/p' NetworkMonitorSearch.csproj | head -n1)"
 [ -n "${TAG:-}" ] || TAG="latest"
-
 REPO="$(
   awk -v cfg="$CONFIG" '
-    /<PropertyGroup/ && /Condition/ && index($0,cfg){inpg=1}
-    inpg && /<ContainerRepository>/{line=$0;sub(/.*<ContainerRepository>/,"",line);sub(/<\/ContainerRepository>.*/,"",line);print line;exit}
-    inpg && /<\/PropertyGroup>/{inpg=0}
+    /<PropertyGroup/ && /Condition=/ {
+      inpg = ($0 ~ ("\\x27\\$\\(Configuration\\)\\x27[[:space:]]*==[[:space:]]*\\x27" cfg "\\x27"))
+    }
+    inpg && /<ContainerRepository>/ {
+      line=$0
+      sub(/.*<ContainerRepository>/,"",line)
+      sub(/<\/ContainerRepository>.*/,"",line)
+      print line
+      exit
+    }
+    /<\/PropertyGroup>/ { inpg=0 }
   ' NetworkMonitorSearch.csproj
 )"
 [ -n "${REPO:-}" ] || REPO="mungert/networkmonitorsearch-dev"

@@ -14,9 +14,15 @@ TAG="$(sed -n 's/.*<ContainerImageTag>\(.*\)<\/ContainerImageTag>.*/\1/p' Networ
 # Read repo from matching PropertyGroup
 REPO="$(
   awk -v cfg="$CONFIG" '
-    /<PropertyGroup/ && /Condition/ && index($0,cfg){inpg=1}
-    inpg && /<ContainerRepository>/{line=$0;sub(/.*<ContainerRepository>/,"",line);sub(/<\/ContainerRepository>.*/,"",line);print line;exit}
-    inpg && /<\/PropertyGroup>/{inpg=0}
+    $0 ~ "<PropertyGroup" && $0 ~ "Condition=" && $0 ~ "\\x27\\$\\(Configuration\\)\\x27[[:space:]]*==[[:space:]]*\\x27" cfg "\\x27" { inpg=1; next }
+    inpg && /<ContainerRepository>/ {
+      line=$0
+      sub(/.*<ContainerRepository>/, "", line)
+      sub(/<\/ContainerRepository>.*/, "", line)
+      print line
+      exit
+    }
+    inpg && /<\/PropertyGroup>/ { inpg=0 }
   ' NetworkMonitorSearch.csproj
 )"
 [ -n "${REPO:-}" ] || REPO="mungert/networkmonitorsearch"
