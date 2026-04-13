@@ -49,7 +49,7 @@ namespace NetworkMonitor.Search
                         });
                });
 
-            services.Configure<HostOptions>(s => s.ShutdownTimeout = TimeSpan.FromMinutes(1));
+            services.Configure<HostOptions>(s => s.ShutdownTimeout = TimeSpan.FromSeconds(30));
             services.AddSingleton(_cancellationTokenSource);
             services.AddSingleton<IRabbitRepo, RabbitRepo>();
             services.AddSingleton<IRabbitListener, RabbitListener>();
