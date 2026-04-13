@@ -97,7 +97,7 @@ namespace NetworkMonitor.Search
             services.AddAsyncServiceInitialization()
                 .AddInitAction<IRabbitRepo>(async (rabbitRepo) =>
                     {
-                        await rabbitRepo.ConnectAndSetUp();
+                        await rabbitRepo.ConnectAndSetUp(_cancellationTokenSource.Token);
                     })
                 .AddInitAction<IOpenSearchService>(async (openSearchService) =>
                     {
@@ -105,10 +105,29 @@ namespace NetworkMonitor.Search
                     })
                 .AddInitAction<IRabbitListener>(async (rabbitListener) =>
                     {
-                        await rabbitListener.Setup();
+                        await rabbitListener.Setup(_cancellationTokenSource.Token);
                     });
         }
 
+        public void Configure(IApplicationBuilder app, IWebHostEnvironment env, IHostApplicationLifetime appLifetime)
+        {
+            appLifetime.ApplicationStopping.Register(() =>
+            {
+                _cancellationTokenSource.Cancel();
+
+                var rabbitRepo = app.ApplicationServices.GetService<IRabbitRepo>();
+                if (rabbitRepo != null)
+                {
+                    rabbitRepo.Shutdown().GetAwaiter().GetResult();
+                }
+
+                var rabbitListener = app.ApplicationServices.GetService<IRabbitListener>();
+                if (rabbitListener != null)
+                {
+                    rabbitListener.Shutdown().GetAwaiter().GetResult();
+                }
+            });
+        }
 
     }
 }

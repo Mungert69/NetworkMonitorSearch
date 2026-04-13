@@ -2,6 +2,7 @@ using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using System.Text;
@@ -21,6 +22,7 @@ namespace NetworkMonitor.Search.Services
         Task<ResultObj> CreateSnapshot(CreateSnapshotRequest createSnapshotRequest);
         Task Shutdown();
         Task<ResultObj> Setup();
+        Task<ResultObj> Setup(CancellationToken cancellationToken);
        
     }
 
