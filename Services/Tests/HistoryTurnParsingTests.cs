@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reflection;
 using Newtonsoft.Json.Linq;
 using NetworkMonitor.Search.Services;
+using NetworkMonitor.Objects;
 using Xunit;
 
 namespace NetworkMonitorSearch.Tests.Services;
@@ -81,6 +82,58 @@ public class HistoryTurnParsingTests
         var actual = (string?)statusMethod!.Invoke(null, new object[] { content });
 
         Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ParseHistoryTurns_HandlesNonStringContentShapes()
+    {
+        var request = new HistoryStoreRequest
+        {
+            HistoryJson = new JObject
+            {
+                ["history"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["role"] = "user",
+                        ["content"] = new JArray
+                        {
+                            new JObject
+                            {
+                                ["type"] = "text",
+                                ["text"] = "First text segment"
+                            },
+                            new JObject
+                            {
+                                ["type"] = "metadata",
+                                ["id"] = 7
+                            }
+                        }
+                    },
+                    new JObject
+                    {
+                        ["role"] = "tool",
+                        ["content"] = new JObject
+                        {
+                            ["status"] = "ok",
+                            ["message"] = "tool completed"
+                        }
+                    }
+                }
+            }.ToString()
+        };
+
+        var parseMethod = typeof(OpenSearchHelper).GetMethod("ParseHistoryTurns", BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(parseMethod);
+
+        var turnsObj = parseMethod!.Invoke(null, new object[] { request });
+        var turns = ((IEnumerable)turnsObj!).Cast<object>().ToList();
+
+        Assert.Equal(2, turns.Count);
+        Assert.Equal("user", GetProperty(turns[0], "Role"));
+        Assert.Contains("First text segment", GetProperty(turns[0], "Text"), StringComparison.Ordinal);
+        Assert.Equal("tool", GetProperty(turns[1], "Role"));
+        Assert.Contains("ok", GetProperty(turns[1], "Text"), StringComparison.OrdinalIgnoreCase);
     }
 
     private static string GetProperty(object instance, string propertyName)

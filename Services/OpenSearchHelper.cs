@@ -2488,17 +2488,21 @@ public class OpenSearchHelper
         for (var i = 0; i < history.Count; i++)
         {
             if (history[i] is not JObject msg) continue;
-            var role = msg["role"]?.Value<string>() ?? string.Empty;
-            var content = msg["content"]?.Value<string>() ?? string.Empty;
+            var role = ExtractHistoryString(msg["role"]);
+            var content = ExtractHistoryString(msg["content"]);
 
             string text = string.Empty;
             if (!string.IsNullOrWhiteSpace(content))
             {
                 text = content.Trim();
             }
-            else if (string.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase) && msg["tool_calls"] is JArray toolCalls && toolCalls.Count > 0)
+            else if (string.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase))
             {
-                text = "Assistant issued a tool call.";
+                var toolCalls = msg["tool_calls"] as JArray ?? msg["toolCalls"] as JArray;
+                if (toolCalls != null && toolCalls.Count > 0)
+                {
+                    text = "Assistant issued a tool call.";
+                }
             }
             else if (string.Equals(role, "tool", StringComparison.OrdinalIgnoreCase))
             {
@@ -2517,6 +2521,84 @@ public class OpenSearchHelper
         }
 
         return turns;
+    }
+
+    private static string ExtractHistoryString(JToken? token)
+    {
+        if (token == null || token.Type == JTokenType.Null)
+        {
+            return string.Empty;
+        }
+
+        if (token.Type == JTokenType.String)
+        {
+            return token.Value<string>() ?? string.Empty;
+        }
+
+        if (token.Type == JTokenType.Array)
+        {
+            var parts = new List<string>();
+            var arr = token as JArray;
+            if (arr == null)
+            {
+                return string.Empty;
+            }
+
+            foreach (var entry in arr)
+            {
+                switch (entry.Type)
+                {
+                    case JTokenType.String:
+                        var text = entry.Value<string>();
+                        if (!string.IsNullOrWhiteSpace(text))
+                        {
+                            parts.Add(text);
+                        }
+                        break;
+                    case JTokenType.Object:
+                        var obj = entry as JObject;
+                        if (obj == null)
+                        {
+                            break;
+                        }
+
+                        var type = obj["type"]?.Value<string>() ?? string.Empty;
+                        if (type.Equals("text", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var objText = obj["text"]?.Value<string>();
+                            if (!string.IsNullOrWhiteSpace(objText))
+                            {
+                                parts.Add(objText);
+                            }
+                        }
+                        else
+                        {
+                            var rawObjText = obj.ToString(Formatting.None);
+                            if (!string.IsNullOrWhiteSpace(rawObjText))
+                            {
+                                parts.Add(rawObjText);
+                            }
+                        }
+                        break;
+                    default:
+                        var raw = entry.ToString(Formatting.None);
+                        if (!string.IsNullOrWhiteSpace(raw))
+                        {
+                            parts.Add(raw);
+                        }
+                        break;
+                }
+            }
+
+            if (parts.Count > 0)
+            {
+                return string.Join("\n", parts);
+            }
+
+            return string.Empty;
+        }
+
+        return token.ToString(Formatting.None);
     }
 
     private static string ExtractToolStatusText(string content)
