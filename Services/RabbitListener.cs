@@ -106,94 +106,40 @@ namespace NetworkMonitor.Search.Services
                         switch (rabbitMQObj.FuncName)
                         {
                             case "createIndex":
-                                await rabbitMQObj.ConnectChannel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
-                                rabbitMQObj.Consumer.ReceivedAsync += async (model, ea) =>
+                                await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "createIndex", async (model, ea) =>
                                 {
-                                    try
-                                    {
-                                        result = await CreateIndex(ConvertToObject<CreateIndexRequest>(model, ea));
-                                        await rabbitMQObj.ConnectChannel.BasicAckAsync(ea.DeliveryTag, false);
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        _logger.LogError(" Error : RabbitListener.DeclareConsumers.createIndex " + ex.Message);
-                                    }
-                                };
+                                    result = await CreateIndex(ConvertToObject<CreateIndexRequest>(model, ea));
+                                });
                                 break;
                             case "queryIndex":
-                                await rabbitMQObj.ConnectChannel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
-                                rabbitMQObj.Consumer.ReceivedAsync += async (model, ea) =>
+                                await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "queryIndex", async (model, ea) =>
                                 {
-                                    try
-                                    {
-                                        result = await QueryIndex(ConvertToObject<QueryIndexRequest>(model, ea));
-                                        await rabbitMQObj.ConnectChannel.BasicAckAsync(ea.DeliveryTag, false);
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        _logger.LogError(" Error : RabbitListener.DeclareConsumers.queryIndex " + ex.Message);
-                                    }
-                                };
+                                    result = await QueryIndex(ConvertToObject<QueryIndexRequest>(model, ea));
+                                });
                                 break;
                             case "createSnapshot":
-                                await rabbitMQObj.ConnectChannel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
-                                rabbitMQObj.Consumer.ReceivedAsync += async (model, ea) =>
+                                await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "createSnapshot", async (model, ea) =>
                                 {
-                                    try
-                                    {
-                                        result = await CreateSnapshot(ConvertToObject<CreateSnapshotRequest>(model, ea));
-                                        await rabbitMQObj.ConnectChannel.BasicAckAsync(ea.DeliveryTag, false);
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        _logger.LogError(" Error : RabbitListener.DeclareConsumers.createSnapshot " + ex.Message);
-                                    }
-                                };
+                                    result = await CreateSnapshot(ConvertToObject<CreateSnapshotRequest>(model, ea));
+                                });
                                 break;
                             case "queryMemory":
-                                await rabbitMQObj.ConnectChannel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
-                                rabbitMQObj.Consumer.ReceivedAsync += async (model, ea) =>
+                                await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "queryMemory", async (model, ea) =>
                                 {
-                                    try
-                                    {
-                                        result = await QueryMemory(ConvertToObject<MemoryQueryRequest>(model, ea));
-                                        await rabbitMQObj.ConnectChannel.BasicAckAsync(ea.DeliveryTag, false);
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        _logger.LogError(" Error : RabbitListener.DeclareConsumers.queryMemory " + ex.Message);
-                                    }
-                                };
+                                    result = await QueryMemory(ConvertToObject<MemoryQueryRequest>(model, ea));
+                                });
                                 break;
                             case "historyStore":
-                                await rabbitMQObj.ConnectChannel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
-                                rabbitMQObj.Consumer.ReceivedAsync += async (model, ea) =>
+                                await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "historyStore", async (model, ea) =>
                                 {
-                                    try
-                                    {
-                                        result = await HistoryStore(ConvertToObject<HistoryStoreRequest>(model, ea));
-                                        await rabbitMQObj.ConnectChannel.BasicAckAsync(ea.DeliveryTag, false);
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        _logger.LogError(" Error : RabbitListener.DeclareConsumers.historyStore " + ex.Message);
-                                    }
-                                };
+                                    result = await HistoryStore(ConvertToObject<HistoryStoreRequest>(model, ea));
+                                });
                                 break;
                             case "queryMemoryTurnWindow":
-                                await rabbitMQObj.ConnectChannel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
-                                rabbitMQObj.Consumer.ReceivedAsync += async (model, ea) =>
+                                await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "queryMemoryTurnWindow", async (model, ea) =>
                                 {
-                                    try
-                                    {
-                                        result = await QueryMemoryTurnWindow(ConvertToObject<MemoryTurnWindowRequest>(model, ea));
-                                        await rabbitMQObj.ConnectChannel.BasicAckAsync(ea.DeliveryTag, false);
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        _logger.LogError(" Error : RabbitListener.DeclareConsumers.queryMemoryTurnWindow " + ex.Message);
-                                    }
-                                };
+                                    result = await QueryMemoryTurnWindow(ConvertToObject<MemoryTurnWindowRequest>(model, ea));
+                                });
                                 break;
                         }
 
