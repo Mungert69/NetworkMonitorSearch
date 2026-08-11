@@ -2575,7 +2575,7 @@ public class OpenSearchHelper
         for (var i = 0; i < history.Count; i++)
         {
             if (history[i] is not JObject msg) continue;
-            var role = ExtractHistoryString(msg["role"]);
+            var role = ExtractHistoryRole(msg["role"]);
             var content = ExtractHistoryString(msg["content"]);
 
             string text = string.Empty;
@@ -2687,6 +2687,20 @@ public class OpenSearchHelper
         }
 
         return token.ToString(Formatting.None);
+    }
+
+    private static string ExtractHistoryRole(JToken? token)
+    {
+        if (token is JObject roleObject)
+        {
+            var value = roleObject["value"] ?? roleObject["Value"];
+            if (value?.Type == JTokenType.String)
+            {
+                return value.Value<string>() ?? string.Empty;
+            }
+        }
+
+        return ExtractHistoryString(token);
     }
 
     private static string ExtractToolStatusText(string content)

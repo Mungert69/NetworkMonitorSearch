@@ -162,6 +162,38 @@ public class HistoryTurnParsingTests
         Assert.Equal("True", GetProperty(turns[0], "HasStableSequence"));
     }
 
+    [Fact]
+    public void ParseHistoryTurns_NormalizesObjectValuedRoles()
+    {
+        var request = new HistoryStoreRequest
+        {
+            HistoryJson = new JObject
+            {
+                ["history"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["role"] = new JObject { ["value"] = "user" },
+                        ["content"] = "camera super woff"
+                    },
+                    new JObject
+                    {
+                        ["role"] = new JObject { ["Value"] = "assistant" },
+                        ["content"] = "remembered"
+                    }
+                }
+            }.ToString()
+        };
+
+        var parseMethod = typeof(OpenSearchHelper).GetMethod("ParseHistoryTurns", BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(parseMethod);
+
+        var turns = ((IEnumerable)parseMethod!.Invoke(null, new object[] { request })!).Cast<object>().ToList();
+
+        Assert.Equal("user", GetProperty(turns[0], "Role"));
+        Assert.Equal("assistant", GetProperty(turns[1], "Role"));
+    }
+
     private static string GetProperty(object instance, string propertyName)
     {
         var prop = instance.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public);
