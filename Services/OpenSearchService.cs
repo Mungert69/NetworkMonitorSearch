@@ -812,6 +812,7 @@ namespace NetworkMonitor.Search.Services
 
             if (EncryptHelper.IsBadKey(_llmEncryptKey, memoryQueryRequest.AuthKey, memoryQueryRequest.AppID))
             {
+                result.Success = false;
                 result.Message += $" Error : Failed QueryMemoryAsync bad AuthKey for AppID {memoryQueryRequest.AppID}";
                 _logger.LogError(result.Message);
                 return result;
@@ -936,6 +937,7 @@ namespace NetworkMonitor.Search.Services
                         memoryTurnWindowRequest.TurnIndex,
                         memoryTurnWindowRequest.WidthBefore,
                         memoryTurnWindowRequest.WidthAfter,
+                        memoryTurnWindowRequest.UserId,
                         MemoryTurnsIndex,
                         timeout);
 

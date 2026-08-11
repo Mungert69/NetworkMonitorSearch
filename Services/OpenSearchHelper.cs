@@ -2230,6 +2230,7 @@ public class OpenSearchHelper
         int turnIndex,
         int widthBefore,
         int widthAfter,
+        string userId = "",
         string indexName = "llm_history_turns",
         TimeSpan? requestTimeout = null,
         CancellationToken cancellationToken = default)
@@ -2238,6 +2239,27 @@ public class OpenSearchHelper
         widthAfter = Math.Clamp(widthAfter, 0, 20);
         var from = Math.Max(0, turnIndex - widthBefore);
         var to = Math.Max(from, turnIndex + widthAfter);
+
+        var filters = new List<object>
+        {
+            new { term = new Dictionary<string, object> { ["session_id"] = sessionId } },
+            new
+            {
+                range = new Dictionary<string, object>
+                {
+                    ["turn_index"] = new
+                    {
+                        gte = from,
+                        lte = to
+                    }
+                }
+            }
+        };
+
+        if (!string.IsNullOrWhiteSpace(userId))
+        {
+            filters.Add(new { term = new Dictionary<string, object> { ["user_id"] = userId } });
+        }
 
         var body = new
         {
@@ -2250,21 +2272,7 @@ public class OpenSearchHelper
             {
                 @bool = new
                 {
-                    filter = new object[]
-                    {
-                        new { term = new Dictionary<string, object> { ["session_id"] = sessionId } },
-                        new
-                        {
-                            range = new Dictionary<string, object>
-                            {
-                                ["turn_index"] = new
-                                {
-                                    gte = from,
-                                    lte = to
-                                }
-                            }
-                        }
-                    }
+                    filter = filters
                 }
             }
         };
