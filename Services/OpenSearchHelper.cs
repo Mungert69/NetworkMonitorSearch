@@ -2443,7 +2443,7 @@ public class OpenSearchHelper
             var confidence = ratio >= 0.9f ? "high" : ratio >= 0.75f ? "medium" : "low";
 
             item.ConfidenceBand = confidence;
-            item.WhyMatched = $"Semantic match score={item.Score:0.###} for intent='{queryText}'.";
+            item.WhyMatched = $"Semantic vector match; score={item.Score:0.###}.";
             item.QueryIntent = queryText;
             item.SourceScope = sourceScope;
 
