@@ -1956,7 +1956,9 @@ public class OpenSearchHelper
             var docs = turns.Select(t =>
             {
                 var hash = ComputeSha256Hash(t.Text);
-                var docId = ComputeSha256Hash($"{request.ServiceId}|{request.SessionId}|{t.TurnIndex}|{t.Role}|{hash}");
+                var docId = t.HasStableSequence
+                    ? ComputeSha256Hash($"{request.ServiceId}|{request.SessionId}|{t.TurnIndex}")
+                    : ComputeSha256Hash($"{request.ServiceId}|{request.SessionId}|{t.TurnIndex}|{t.Role}|{hash}");
                 return new HistoryTurnDoc
                 {
                     Id = docId,
@@ -1985,13 +1987,14 @@ public class OpenSearchHelper
                     visibleIds.Count);
             }
 
-            var existing = await GetExistingHistoryTurnIdsAsync(indexName, docs.Select(d => d.Id).ToList());
+            var existing = await GetExistingHistoryTurnHashesAsync(indexName, docs.Select(d => d.Id).ToList());
             var created = 0;
             var skipped = 0;
 
             foreach (var doc in docs)
             {
-                if (existing.Contains(doc.Id))
+                if (existing.TryGetValue(doc.Id, out var existingHash) &&
+                    string.Equals(existingHash, doc.ContentHash, StringComparison.Ordinal))
                 {
                     skipped++;
                     continue;
@@ -2429,9 +2432,9 @@ public class OpenSearchHelper
         return result;
     }
 
-    private async Task<HashSet<string>> GetExistingHistoryTurnIdsAsync(string indexName, List<string> ids)
+    private async Task<Dictionary<string, string>> GetExistingHistoryTurnHashesAsync(string indexName, List<string> ids)
     {
-        var existing = new HashSet<string>(StringComparer.Ordinal);
+        var existing = new Dictionary<string, string>(StringComparer.Ordinal);
         if (ids.Count == 0) return existing;
 
         var payload = new
@@ -2440,7 +2443,7 @@ public class OpenSearchHelper
             {
                 _index = indexName,
                 _id = id,
-                _source = false
+                _source = new[] { "content_hash" }
             })
         };
 
@@ -2466,7 +2469,7 @@ public class OpenSearchHelper
                 var id = doc["_id"]?.Value<string>();
                 if (!string.IsNullOrWhiteSpace(id))
                 {
-                    existing.Add(id);
+                    existing[id] = (doc["_source"] as JObject)?["content_hash"]?.Value<string>() ?? string.Empty;
                 }
             }
         }
@@ -2480,6 +2483,10 @@ public class OpenSearchHelper
         var root = JObject.Parse(request.HistoryJson);
         var history = root["history"] as JArray;
         if (history == null) return turns;
+        var sequences = root["historySequences"] as JArray;
+        var hasStableSequences = sequences?.Count == history.Count &&
+                                 sequences.All(value => value.Type == JTokenType.Integer && value.Value<long>() >= 0) &&
+                                 sequences.Select(value => value.Value<long>()).Distinct().Count() == history.Count;
 
         long baseUnix = request.StartUnixTime > 0
             ? request.StartUnixTime
@@ -2515,8 +2522,9 @@ public class OpenSearchHelper
             {
                 Role = string.IsNullOrWhiteSpace(role) ? "unknown" : role.Trim().ToLowerInvariant(),
                 Text = text,
-                TurnIndex = i,
-                TurnUnixTime = baseUnix + i
+                TurnIndex = hasStableSequences ? checked((int)sequences![i]!.Value<long>()) : i,
+                TurnUnixTime = baseUnix + (hasStableSequences ? sequences![i]!.Value<long>() : i),
+                HasStableSequence = hasStableSequences
             });
         }
 
@@ -2639,6 +2647,7 @@ public class OpenSearchHelper
         public string Text { get; set; } = string.Empty;
         public int TurnIndex { get; set; }
         public long TurnUnixTime { get; set; }
+        public bool HasStableSequence { get; set; }
     }
 
     private sealed class HistoryTurnDoc

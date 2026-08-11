@@ -136,6 +136,32 @@ public class HistoryTurnParsingTests
         Assert.Contains("ok", GetProperty(turns[1], "Text"), StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void ParseHistoryTurns_UsesPersistedSequencesInsteadOfArrayPositions()
+    {
+        var request = new HistoryStoreRequest
+        {
+            HistoryJson = new JObject
+            {
+                ["historySequences"] = new JArray(7, 42),
+                ["history"] = new JArray
+                {
+                    new JObject { ["role"] = "user", ["content"] = "Retained first message" },
+                    new JObject { ["role"] = "assistant", ["content"] = "Retained second message" }
+                }
+            }.ToString()
+        };
+
+        var parseMethod = typeof(OpenSearchHelper).GetMethod("ParseHistoryTurns", BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(parseMethod);
+
+        var turns = ((IEnumerable)parseMethod!.Invoke(null, new object[] { request })!).Cast<object>().ToList();
+
+        Assert.Equal("7", GetProperty(turns[0], "TurnIndex"));
+        Assert.Equal("42", GetProperty(turns[1], "TurnIndex"));
+        Assert.Equal("True", GetProperty(turns[0], "HasStableSequence"));
+    }
+
     private static string GetProperty(object instance, string propertyName)
     {
         var prop = instance.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public);
