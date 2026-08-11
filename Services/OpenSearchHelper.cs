@@ -2298,6 +2298,86 @@ public class OpenSearchHelper
         return turns;
     }
 
+    public async Task<MemoryTurnRangeResult> GetHistoryTurnRangeAsync(
+        string sessionId,
+        string userId,
+        int startTurnIndex,
+        int endTurnIndex,
+        int offset,
+        string indexName = "llm_history_turns",
+        TimeSpan? requestTimeout = null,
+        CancellationToken cancellationToken = default)
+    {
+        const int pageSize = 20;
+        var body = new
+        {
+            from = offset,
+            size = pageSize + 1,
+            sort = new object[]
+            {
+                new Dictionary<string, object> { ["turn_index"] = "asc" }
+            },
+            query = new
+            {
+                @bool = new
+                {
+                    filter = new object[]
+                    {
+                        new { term = new Dictionary<string, object> { ["session_id"] = sessionId } },
+                        new { term = new Dictionary<string, object> { ["user_id"] = userId } },
+                        new
+                        {
+                            range = new Dictionary<string, object>
+                            {
+                                ["turn_index"] = new
+                                {
+                                    gte = startTurnIndex,
+                                    lte = endTurnIndex
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        var json = JsonConvert.SerializeObject(body);
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
+        var response = await PostWithTimeoutAsync($"/{indexName}/_search", content, requestTimeout, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new Exception($"History turn range search failed: {response.ReasonPhrase}");
+        }
+
+        var payload = await response.Content.ReadAsStringAsync();
+        var root = JObject.Parse(payload);
+        var hits = root["hits"]?["hits"] as JArray ?? new JArray();
+        var page = new MemoryTurnRangeResult
+        {
+            HasMore = hits.Count > pageSize
+        };
+
+        foreach (var hit in hits.OfType<JObject>().Take(pageSize))
+        {
+            var source = hit["_source"] as JObject;
+            if (source == null) continue;
+            page.Turns.Add(new MemoryContextTurn
+            {
+                Role = source["role"]?.Value<string>() ?? string.Empty,
+                Text = source["text"]?.Value<string>() ?? string.Empty,
+                TurnIndex = source["turn_index"]?.Value<int>() ?? 0,
+                TurnUnixTime = source["turn_unix_time"]?.Value<long>() ?? 0
+            });
+        }
+
+        if (page.HasMore)
+        {
+            page.NextOffset = offset + page.Turns.Count;
+        }
+
+        return page;
+    }
+
     private async Task EnrichMemoryResultsWithContextAsync(
         List<MemoryQueryResult> results,
         string queryText,

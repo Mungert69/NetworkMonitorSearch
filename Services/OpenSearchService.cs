@@ -21,6 +21,7 @@ namespace NetworkMonitor.Search.Services
         Task<ResultObj> QueryIndexAsync(QueryIndexRequest queryIndexRequest);
         Task<ResultObj> QueryMemoryAsync(MemoryQueryRequest memoryQueryRequest);
         Task<ResultObj> QueryMemoryTurnWindowAsync(MemoryTurnWindowRequest memoryTurnWindowRequest);
+        Task<ResultObj> QueryMemoryTurnRangeAsync(MemoryTurnRangeRequest memoryTurnRangeRequest);
         Task<ResultObj> HistoryStoreAsync(HistoryStoreRequest historyStoreRequest);
 
         // New methods for snapshot and bulk index creation
@@ -963,6 +964,108 @@ namespace NetworkMonitor.Search.Services
                 result.Success = false;
                 result.Message += $"Error querying memory turn window: {ex.GetType().Name}: {ex.Message}";
                 _logger.LogError(ex, "MessageAPI: QueryMemoryTurnWindowAsync failed");
+            }
+
+            return result;
+        }
+
+        public async Task<ResultObj> QueryMemoryTurnRangeAsync(MemoryTurnRangeRequest memoryTurnRangeRequest)
+        {
+            var result = new ResultObj
+            {
+                Success = true,
+                Message = "MessageAPI: QueryMemoryTurnRangeAsync: "
+            };
+
+            if (memoryTurnRangeRequest == null)
+            {
+                result.Success = false;
+                result.Message += "Error: memoryTurnRangeRequest is null.";
+                return result;
+            }
+
+            memoryTurnRangeRequest.Success = false;
+            if (EncryptHelper.IsBadKey(_llmEncryptKey, memoryTurnRangeRequest.AuthKey, memoryTurnRangeRequest.AppID))
+            {
+                result.Success = false;
+                result.Message += $" Error : Failed QueryMemoryTurnRangeAsync bad AuthKey for AppID {memoryTurnRangeRequest.AppID}";
+                _logger.LogError(result.Message);
+                return result;
+            }
+
+            if (string.IsNullOrWhiteSpace(memoryTurnRangeRequest.SessionId))
+            {
+                result.Success = false;
+                result.Message += "Error: session_id is empty.";
+                memoryTurnRangeRequest.Message = result.Message;
+                return result;
+            }
+
+            if (string.IsNullOrWhiteSpace(memoryTurnRangeRequest.UserId))
+            {
+                result.Success = false;
+                result.Message += "Error: user_id is empty.";
+                memoryTurnRangeRequest.Message = result.Message;
+                return result;
+            }
+
+            if (memoryTurnRangeRequest.StartTurnIndex < 0
+                || memoryTurnRangeRequest.EndTurnIndex < memoryTurnRangeRequest.StartTurnIndex
+                || memoryTurnRangeRequest.Offset < 0)
+            {
+                result.Success = false;
+                result.Message += "Error: invalid turn range or offset.";
+                memoryTurnRangeRequest.Message = result.Message;
+                return result;
+            }
+
+            try
+            {
+                var ensure = await _openSearchHelper.EnsureHistoryTurnsIndexExistsAsync(MemoryTurnsIndex);
+                if (!ensure.Success)
+                {
+                    result.Success = false;
+                    result.Message += ensure.Message;
+                }
+                else
+                {
+                    var timeout = ResolveQueryTimeout(MemoryTurnsIndex);
+                    var page = await _openSearchHelper.GetHistoryTurnRangeAsync(
+                        memoryTurnRangeRequest.SessionId,
+                        memoryTurnRangeRequest.UserId,
+                        memoryTurnRangeRequest.StartTurnIndex,
+                        memoryTurnRangeRequest.EndTurnIndex,
+                        memoryTurnRangeRequest.Offset,
+                        MemoryTurnsIndex,
+                        timeout);
+
+                    memoryTurnRangeRequest.Turns = page.Turns;
+                    memoryTurnRangeRequest.HasMore = page.HasMore;
+                    memoryTurnRangeRequest.NextOffset = page.NextOffset;
+                    memoryTurnRangeRequest.Success = true;
+                    memoryTurnRangeRequest.Message = $"Memory turn range executed. Turns={page.Turns.Count}. HasMore={page.HasMore}.";
+                    result.Success = true;
+                    result.Message += memoryTurnRangeRequest.Message;
+                }
+
+                var responseExchange = string.IsNullOrWhiteSpace(memoryTurnRangeRequest.ResponseExchange)
+                    ? $"{memoryTurnRangeRequest.AppID}MemoryTurnRangeResult"
+                    : memoryTurnRangeRequest.ResponseExchange;
+
+                if (string.IsNullOrEmpty(memoryTurnRangeRequest.RoutingKey))
+                {
+                    await _rabbitRepo.PublishAsync(responseExchange, memoryTurnRangeRequest);
+                }
+                else
+                {
+                    await _rabbitRepo.PublishAsync(responseExchange, memoryTurnRangeRequest, memoryTurnRangeRequest.RoutingKey);
+                }
+            }
+            catch (Exception ex)
+            {
+                result.Success = false;
+                result.Message += $"Error querying memory turn range: {ex.GetType().Name}: {ex.Message}";
+                _logger.LogError(ex, "MessageAPI: QueryMemoryTurnRangeAsync failed");
             }
 
             return result;

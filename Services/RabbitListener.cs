@@ -18,6 +18,7 @@ namespace NetworkMonitor.Search.Services
         Task<ResultObj> QueryIndex(QueryIndexRequest queryIndexRequest);
         Task<ResultObj> QueryMemory(MemoryQueryRequest memoryQueryRequest);
         Task<ResultObj> QueryMemoryTurnWindow(MemoryTurnWindowRequest request);
+        Task<ResultObj> QueryMemoryTurnRange(MemoryTurnRangeRequest request);
         Task<ResultObj> HistoryStore(HistoryStoreRequest historyStoreRequest);
         Task<ResultObj> CreateSnapshot(CreateSnapshotRequest createSnapshotRequest);
         Task Shutdown();
@@ -66,6 +67,12 @@ namespace NetworkMonitor.Search.Services
             {
                 ExchangeName = "queryMemoryTurnWindow",
                 FuncName = "queryMemoryTurnWindow",
+                MessageTimeout = 60000
+            });
+            _rabbitMQObjs.Add(new RabbitMQObj()
+            {
+                ExchangeName = "queryMemoryTurnRange",
+                FuncName = "queryMemoryTurnRange",
                 MessageTimeout = 60000
             });
             _rabbitMQObjs.Add(new RabbitMQObj()
@@ -139,6 +146,12 @@ namespace NetworkMonitor.Search.Services
                                 await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "queryMemoryTurnWindow", async (model, ea) =>
                                 {
                                     result = await QueryMemoryTurnWindow(ConvertToObject<MemoryTurnWindowRequest>(model, ea));
+                                });
+                                break;
+                            case "queryMemoryTurnRange":
+                                await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "queryMemoryTurnRange", async (model, ea) =>
+                                {
+                                    result = await QueryMemoryTurnRange(ConvertToObject<MemoryTurnRangeRequest>(model, ea));
                                 });
                                 break;
                         }
@@ -302,6 +315,33 @@ namespace NetworkMonitor.Search.Services
             {
                 result.Success = false;
                 result.Message += $"Error: Failed to query memory turn window. Error was: {e.Message}";
+                _logger.LogError(result.Message);
+            }
+            return result;
+        }
+
+        public async Task<ResultObj> QueryMemoryTurnRange(MemoryTurnRangeRequest? request)
+        {
+            var result = new ResultObj();
+            result.Success = false;
+            result.Message = "MessageAPI: QueryMemoryTurnRange: ";
+            if (request == null)
+            {
+                result.Message += "Error: request is null.";
+                return result;
+            }
+
+            try
+            {
+                var queryResult = await _openSearchService.QueryMemoryTurnRangeAsync(request);
+                result.Success = queryResult.Success;
+                result.Message += queryResult.Message;
+                _logger.LogInformation(result.Message);
+            }
+            catch (Exception e)
+            {
+                result.Success = false;
+                result.Message += $"Error: Failed to query memory turn range. Error was: {e.Message}";
                 _logger.LogError(result.Message);
             }
             return result;
