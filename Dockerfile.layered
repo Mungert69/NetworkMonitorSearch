@@ -5,11 +5,11 @@ FROM mcr.microsoft.com/dotnet/aspnet:${ASPNET_VERSION}
 
 ARG TARGETARCH
 WORKDIR /app
-COPY docker-context/layers/${TARGETARCH}/native/ ./
-COPY docker-context/layers/${TARGETARCH}/dependencies/ ./
-COPY docker-context/layers/${TARGETARCH}/networkmonitor/ ./
-COPY docker-context/layers/${TARGETARCH}/networkmonitordata/ ./
-COPY docker-context/layers/${TARGETARCH}/content/ ./
-COPY docker-context/layers/${TARGETARCH}/application/ ./
+COPY layers/${TARGETARCH}/native/ ./
+COPY layers/${TARGETARCH}/dependencies/ ./
+COPY layers/${TARGETARCH}/networkmonitor/ ./
+COPY layers/${TARGETARCH}/networkmonitordata/ ./
+COPY layers/${TARGETARCH}/content/ ./
+COPY layers/${TARGETARCH}/application/ ./
 USER 1654
 ENTRYPOINT ["dotnet", "NetworkMonitorSearch.dll"]

@@ -6,7 +6,7 @@ APP_NAME=NetworkMonitorSearch
 PROJECT="$APP_NAME.csproj"
 LOG_DIR=../_artifacts/logs
 ARTIFACTS_DIR="../_artifacts/$APP_NAME"
-CONTEXT_DIR=./docker-context
+CONTEXT_DIR="$ARTIFACTS_DIR/docker-context"
 mkdir -p "$LOG_DIR" "$ARTIFACTS_DIR"
 TAG=$(sed -n 's/.*<ContainerImageTag>\(.*\)<\/ContainerImageTag>.*/\1/p' "$PROJECT" | head -n1)
 [ -n "${TAG:-}" ] || TAG=latest
@@ -26,10 +26,11 @@ mkdir -p "$CONTEXT_DIR/layers"
 for mapping in amd64:linux-x64 arm64:linux-arm64; do
   arch=${mapping%%:*}; rid=${mapping#*:}; publish_dir="$ARTIFACTS_DIR/publish-$arch"
   rm -rf "$publish_dir"; mkdir -p "$publish_dir"
-  dotnet publish "$PROJECT" -c "$CONFIG" -r "$rid" --self-contained false -o "$publish_dir"
+  dotnet publish "$PROJECT" -c "$CONFIG" -r "$rid" --self-contained false \
+    -p:PublishProfile= -o "$publish_dir"
   ./stage-docker-publish-layers "$publish_dir" "$CONTEXT_DIR/layers/$arch" "$APP_NAME"
 done
 docker buildx build --progress=plain --platform linux/amd64,linux/arm64 \
-  --build-arg ASPNET_VERSION="$ASPNET_VERSION" -f Dockerfile.layered -t "$IMAGE" --push . \
+  --build-arg ASPNET_VERSION="$ASPNET_VERSION" -f "$PWD/Dockerfile.layered" -t "$IMAGE" --push "$CONTEXT_DIR" \
   2>&1 | tee "$LOG_DIR/$APP_NAME-$CONFIG-layered.build.log"
 echo "Pushed split-layer multi-arch image: $IMAGE"
