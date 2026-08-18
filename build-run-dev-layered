@@ -1,0 +1,3 @@
+#!/bin/sh
+set -eu
+ALLOW_TEST_FAILURES=true exec ./build-layered Release-Dev

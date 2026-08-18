@@ -167,6 +167,9 @@ DocProject/Help/html
 # Click-Once directory
 publish/
 
+# Generated Docker publish staging
+docker-context/
+
 # Publish Web Output
 *.[Pp]ublish.xml
 *.azurePubxml

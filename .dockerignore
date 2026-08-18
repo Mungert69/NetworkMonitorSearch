@@ -1,0 +1,8 @@
+.git/
+.vs/
+bin/
+obj/
+publish/
+TestResults/
+*.user
+*.suo

@@ -1,0 +1,34 @@
+#!/bin/sh
+set -eu
+if [ "$#" -ne 3 ]; then echo "Usage: $0 PUBLISH_DIR LAYERS_DIR APP_NAME" >&2; exit 2; fi
+PUBLISH_DIR=$1
+LAYERS_DIR=$2
+APP_NAME=$3
+[ -d "$PUBLISH_DIR" ] || { echo "Publish directory not found: $PUBLISH_DIR" >&2; exit 1; }
+rm -rf "$LAYERS_DIR"
+mkdir -p "$LAYERS_DIR/native" "$LAYERS_DIR/dependencies" "$LAYERS_DIR/networkmonitor" \
+  "$LAYERS_DIR/networkmonitordata" "$LAYERS_DIR/content" "$LAYERS_DIR/application"
+cp -a "$PUBLISH_DIR/." "$LAYERS_DIR/dependencies/"
+
+move_root_matches() {
+  source_dir=$1; destination_dir=$2; pattern=$3
+  for source_file in "$source_dir"/$pattern; do
+    [ -e "$source_file" ] || continue
+    mv "$source_file" "$destination_dir/"
+  done
+}
+
+for directory in runtimes openssl alpine arm64 macos ubuntu x64 x86; do
+  [ ! -e "$LAYERS_DIR/dependencies/$directory" ] || mv "$LAYERS_DIR/dependencies/$directory" "$LAYERS_DIR/native/"
+done
+for directory in Assets Services TestData agent-files agentfiles templates wwwroot \
+  qwen3-embed-0.6-onnx stsb-bert-tiny-onnx; do
+  [ ! -e "$LAYERS_DIR/dependencies/$directory" ] || mv "$LAYERS_DIR/dependencies/$directory" "$LAYERS_DIR/content/"
+done
+move_root_matches "$LAYERS_DIR/dependencies" "$LAYERS_DIR/application" "${APP_NAME}*"
+move_root_matches "$LAYERS_DIR/dependencies" "$LAYERS_DIR/application" 'appsettings*.json'
+move_root_matches "$LAYERS_DIR/dependencies" "$LAYERS_DIR/networkmonitordata" 'NetworkMonitorData*'
+move_root_matches "$LAYERS_DIR/dependencies" "$LAYERS_DIR/networkmonitor" 'NetworkMonitor.*'
+echo "Docker publish layers staged for $APP_NAME."
+du -sh "$LAYERS_DIR/native" "$LAYERS_DIR/dependencies" "$LAYERS_DIR/networkmonitor" \
+  "$LAYERS_DIR/networkmonitordata" "$LAYERS_DIR/content" "$LAYERS_DIR/application"
