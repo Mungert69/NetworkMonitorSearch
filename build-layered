@@ -8,12 +8,12 @@ LOG_DIR=../_artifacts/logs
 ARTIFACTS_DIR="../_artifacts/$APP_NAME"
 CONTEXT_DIR=./docker-context
 mkdir -p "$LOG_DIR" "$ARTIFACTS_DIR"
-TAG=$(sed -n 's/.*<ContainerImageTag>\\(.*\\)<\\/ContainerImageTag>.*/\\1/p' "$PROJECT" | head -n1)
+TAG=$(sed -n 's/.*<ContainerImageTag>\(.*\)<\/ContainerImageTag>.*/\1/p' "$PROJECT" | head -n1)
 [ -n "${TAG:-}" ] || TAG=latest
 REPO=$(awk -v cfg="$CONFIG" '
   /<PropertyGroup/ && /Condition=/ { inpg=($0 ~ ("\\x27\\$\\(Configuration\\)\\x27[[:space:]]*==[[:space:]]*\\x27" cfg "\\x27")); next }
-  inpg && /<ContainerRepository>/{line=$0;sub(/.*<ContainerRepository>/,"",line);sub(/<\\/ContainerRepository>.*/,"",line);print line;exit}
-  inpg && /<\\/PropertyGroup>/{inpg=0}
+  inpg && /<ContainerRepository>/{line=$0;sub(/.*<ContainerRepository>/,"",line);sub(/<\/ContainerRepository>.*/,"",line);print line;exit}
+  inpg && /<\/PropertyGroup>/{inpg=0}
 ' "$PROJECT")
 [ -n "${REPO:-}" ] || { echo "No ContainerRepository found for $CONFIG" >&2; exit 1; }
 IMAGE="$REPO:$TAG"
