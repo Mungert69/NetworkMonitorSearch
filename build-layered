@@ -2,6 +2,7 @@
 set -eu
 ( set -o pipefail ) 2>/dev/null && set -o pipefail
 CONFIG=${1:?Configuration is required}
+MODE=${2:-push}
 APP_NAME=NetworkMonitorSearch
 PROJECT="$APP_NAME.csproj"
 LOG_DIR=../_artifacts/logs
@@ -19,18 +20,38 @@ REPO=$(awk -v cfg="$CONFIG" '
 IMAGE="$REPO:$TAG"
 ASPNET_VERSION=$(dotnet --info | awk '/^Host:/ { host=1; next } host && /^[[:space:]]*Version:/ { print $2; exit }')
 : "${ASPNET_VERSION:?Could not determine Host version from dotnet --info}"
-echo "Building split-layer multi-arch image $IMAGE with ASP.NET $ASPNET_VERSION"
+case "$MODE" in
+  push)
+    mappings="amd64:linux-x64 arm64:linux-arm64"
+    platforms="linux/amd64,linux/arm64"
+    output_flag=--push
+    build_description="split-layer multi-arch"
+    completion_description="Pushed split-layer multi-arch"
+    ;;
+  local)
+    case "$(uname -m)" in
+      x86_64|amd64) mappings="amd64:linux-x64"; platforms="linux/amd64" ;;
+      aarch64|arm64) mappings="arm64:linux-arm64"; platforms="linux/arm64" ;;
+      *) echo "Unsupported host architecture: $(uname -m)" >&2; exit 1 ;;
+    esac
+    output_flag=--load
+    build_description="split-layer local"
+    completion_description="Loaded split-layer local"
+    ;;
+  *) echo "Unknown build mode: $MODE (expected push or local)" >&2; exit 1 ;;
+esac
+echo "Building $build_description image $IMAGE with ASP.NET $ASPNET_VERSION"
 if [ "${ALLOW_TEST_FAILURES:-false}" = true ]; then dotnet test --nologo || true; else dotnet test --nologo; fi
 rm -rf "$CONTEXT_DIR"
 mkdir -p "$CONTEXT_DIR/layers"
-for mapping in amd64:linux-x64 arm64:linux-arm64; do
+for mapping in $mappings; do
   arch=${mapping%%:*}; rid=${mapping#*:}; publish_dir="$ARTIFACTS_DIR/publish-$arch"
   rm -rf "$publish_dir"; mkdir -p "$publish_dir"
   dotnet publish "$PROJECT" -c "$CONFIG" -r "$rid" --self-contained false \
     -p:PublishProfile= -o "$publish_dir"
   ./stage-docker-publish-layers "$publish_dir" "$CONTEXT_DIR/layers/$arch" "$APP_NAME"
 done
-docker buildx build --progress=plain --platform linux/amd64,linux/arm64 \
-  --build-arg ASPNET_VERSION="$ASPNET_VERSION" -f "$PWD/Dockerfile.layered" -t "$IMAGE" --push "$CONTEXT_DIR" \
-  2>&1 | tee "$LOG_DIR/$APP_NAME-$CONFIG-layered.build.log"
-echo "Pushed split-layer multi-arch image: $IMAGE"
+docker buildx build --progress=plain --platform "$platforms" \
+  --build-arg ASPNET_VERSION="$ASPNET_VERSION" -f "$PWD/Dockerfile.layered" -t "$IMAGE" "$output_flag" "$CONTEXT_DIR" \
+  2>&1 | tee "$LOG_DIR/$APP_NAME-$CONFIG-$MODE-layered.build.log"
+echo "$completion_description image: $IMAGE"
