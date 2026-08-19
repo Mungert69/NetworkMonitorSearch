@@ -373,11 +373,11 @@ public abstract class MultiVectorBookIndexingStrategyBase<T> : IndexingStrategyB
                 [SummaryVectorFieldName] = 1f
             }
             : new Dictionary<string, float>
-        {
-            [QuestionVectorFieldName] = 1f,
-            [ContentVectorFieldName] = 1f,
-            [SummaryVectorFieldName] = 1f
-        };
+            {
+                [QuestionVectorFieldName] = 1f,
+                [ContentVectorFieldName] = 1f,
+                [SummaryVectorFieldName] = 1f
+            };
 
     private static string? GetExtensionString(T book, string key)
     {

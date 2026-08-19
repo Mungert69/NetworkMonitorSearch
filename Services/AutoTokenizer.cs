@@ -13,7 +13,7 @@ namespace NetworkMonitor.Search.Services
         private readonly uint _padTokenId;
         private readonly int _maxTokenLengthCap;
 
-        public AutoTokenizer(string modelDir,int maxTokenLengthCap)
+        public AutoTokenizer(string modelDir, int maxTokenLengthCap)
         {
             // Load tokenizer.json
             var tokJson = Path.Combine(modelDir, "tokenizer.json");

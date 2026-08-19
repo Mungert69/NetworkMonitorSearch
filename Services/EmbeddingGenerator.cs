@@ -28,7 +28,7 @@ namespace NetworkMonitor.Search.Services
 
         private static readonly SemaphoreSlim _embeddingSemaphore = new SemaphoreSlim(1, 1);
 
-        public EmbeddingGenerator(MLParams mlParams, ILogger<EmbeddingGenerator> logger )
+        public EmbeddingGenerator(MLParams mlParams, ILogger<EmbeddingGenerator> logger)
         {
             _logger = logger;
             _modelPath = Path.Combine(mlParams.EmbeddingModelDir, "model.onnx");

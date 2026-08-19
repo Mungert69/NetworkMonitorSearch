@@ -3,14 +3,15 @@ using System;
 using System.Collections.Generic;
 namespace NetworkMonitor.Search.Services;
 
-public class OSModelParams{
+public class OSModelParams
+{
 
 
     private string _url;
     private string _user;
     private string _key;
     private string _embeddingModelDir;
-    private int _embeddingModelVecDim=128;
+    private int _embeddingModelVecDim = 128;
     private string _defaultIndex;
     private TimeSpan _httpTimeout = TimeSpan.FromSeconds(100);
     private HashSet<string> _hybridIndices = new(StringComparer.OrdinalIgnoreCase);
@@ -22,7 +23,7 @@ public class OSModelParams{
     private float _hybridLexicalWeight = 1.0f;
     private bool _enableAltQuestionFields = false;
 
-    public Uri SearchUri  => new Uri(_url);
+    public Uri SearchUri => new Uri(_url);
 
     public string Url { get => _url; set => _url = value; }
     public string Key { get => _key; set => _key = value; }

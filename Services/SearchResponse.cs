@@ -5,7 +5,7 @@ using System.Collections.Generic;
 
 namespace NetworkMonitor.Objects
 {
-  
+
     public class SearchResponseObj
     {
         [JsonProperty("took")]

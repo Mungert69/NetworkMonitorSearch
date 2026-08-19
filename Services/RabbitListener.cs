@@ -24,7 +24,7 @@ namespace NetworkMonitor.Search.Services
         Task Shutdown();
         Task<ResultObj> Setup();
         Task<ResultObj> Setup(CancellationToken cancellationToken);
-       
+
     }
 
     public class RabbitListener : RabbitListenerBase, IRabbitListener
@@ -96,68 +96,68 @@ namespace NetworkMonitor.Search.Services
             var result = new ResultObj();
             try
             {
-                 await Parallel.ForEachAsync(_rabbitMQObjs, async (rabbitMQObj, cancellationToken) =>
-                {
+                await Parallel.ForEachAsync(_rabbitMQObjs, async (rabbitMQObj, cancellationToken) =>
+               {
 
-                    if (rabbitMQObj.ConnectChannel != null)
-                    {
+                   if (rabbitMQObj.ConnectChannel != null)
+                   {
 
-                        rabbitMQObj.Consumer = new AsyncEventingBasicConsumer(rabbitMQObj.ConnectChannel);
-                        await rabbitMQObj.ConnectChannel.BasicConsumeAsync(
-                                queue: rabbitMQObj.QueueName,
-                                autoAck: false,
-                                consumer: rabbitMQObj.Consumer
-                            );
+                       rabbitMQObj.Consumer = new AsyncEventingBasicConsumer(rabbitMQObj.ConnectChannel);
+                       await rabbitMQObj.ConnectChannel.BasicConsumeAsync(
+                               queue: rabbitMQObj.QueueName,
+                               autoAck: false,
+                               consumer: rabbitMQObj.Consumer
+                           );
 
 
-                        switch (rabbitMQObj.FuncName)
-                        {
-                            case "createIndex":
-                                await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "createIndex", async (model, ea) =>
-                                {
-                                    result = await CreateIndex(ConvertToObject<CreateIndexRequest>(model, ea));
-                                });
-                                break;
-                            case "queryIndex":
-                                await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "queryIndex", async (model, ea) =>
-                                {
-                                    result = await QueryIndex(ConvertToObject<QueryIndexRequest>(model, ea));
-                                });
-                                break;
-                            case "createSnapshot":
-                                await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "createSnapshot", async (model, ea) =>
-                                {
-                                    result = await CreateSnapshot(ConvertToObject<CreateSnapshotRequest>(model, ea));
-                                });
-                                break;
-                            case "queryMemory":
-                                await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "queryMemory", async (model, ea) =>
-                                {
-                                    result = await QueryMemory(ConvertToObject<MemoryQueryRequest>(model, ea));
-                                });
-                                break;
-                            case "historyStore":
-                                await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "historyStore", async (model, ea) =>
-                                {
-                                    result = await HistoryStore(ConvertToObject<HistoryStoreRequest>(model, ea));
-                                });
-                                break;
-                            case "queryMemoryTurnWindow":
-                                await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "queryMemoryTurnWindow", async (model, ea) =>
-                                {
-                                    result = await QueryMemoryTurnWindow(ConvertToObject<MemoryTurnWindowRequest>(model, ea));
-                                });
-                                break;
-                            case "queryMemoryTurnRange":
-                                await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "queryMemoryTurnRange", async (model, ea) =>
-                                {
-                                    result = await QueryMemoryTurnRange(ConvertToObject<MemoryTurnRangeRequest>(model, ea));
-                                });
-                                break;
-                        }
+                       switch (rabbitMQObj.FuncName)
+                       {
+                           case "createIndex":
+                               await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "createIndex", async (model, ea) =>
+                               {
+                                   result = await CreateIndex(ConvertToObject<CreateIndexRequest>(model, ea));
+                               });
+                               break;
+                           case "queryIndex":
+                               await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "queryIndex", async (model, ea) =>
+                               {
+                                   result = await QueryIndex(ConvertToObject<QueryIndexRequest>(model, ea));
+                               });
+                               break;
+                           case "createSnapshot":
+                               await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "createSnapshot", async (model, ea) =>
+                               {
+                                   result = await CreateSnapshot(ConvertToObject<CreateSnapshotRequest>(model, ea));
+                               });
+                               break;
+                           case "queryMemory":
+                               await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "queryMemory", async (model, ea) =>
+                               {
+                                   result = await QueryMemory(ConvertToObject<MemoryQueryRequest>(model, ea));
+                               });
+                               break;
+                           case "historyStore":
+                               await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "historyStore", async (model, ea) =>
+                               {
+                                   result = await HistoryStore(ConvertToObject<HistoryStoreRequest>(model, ea));
+                               });
+                               break;
+                           case "queryMemoryTurnWindow":
+                               await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "queryMemoryTurnWindow", async (model, ea) =>
+                               {
+                                   result = await QueryMemoryTurnWindow(ConvertToObject<MemoryTurnWindowRequest>(model, ea));
+                               });
+                               break;
+                           case "queryMemoryTurnRange":
+                               await RegisterConsumerHandlerAsync(rabbitMQObj, 1, "queryMemoryTurnRange", async (model, ea) =>
+                               {
+                                   result = await QueryMemoryTurnRange(ConvertToObject<MemoryTurnRangeRequest>(model, ea));
+                               });
+                               break;
+                       }
 
-                    }
-                });
+                   }
+               });
 
                 result.Success = true;
                 result.Message = "Success: Declared all consumers.";
@@ -347,7 +347,7 @@ namespace NetworkMonitor.Search.Services
             return result;
         }
 
- public async Task<ResultObj> CreateSnapshot(CreateSnapshotRequest? createSnapshotRequest)
+        public async Task<ResultObj> CreateSnapshot(CreateSnapshotRequest? createSnapshotRequest)
         {
             var result = new ResultObj();
             result.Success = false;

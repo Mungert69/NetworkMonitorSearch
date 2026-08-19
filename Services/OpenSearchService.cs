@@ -58,7 +58,7 @@ namespace NetworkMonitor.Search.Services
         )
         {
             _logger = logger;
-                        _rabbitRepo = rabbitRepo;
+            _rabbitRepo = rabbitRepo;
 
             // Map MLParams to OSModelParams
             _modelParams = new OSModelParams
@@ -87,7 +87,7 @@ namespace NetworkMonitor.Search.Services
             _llmThreads = mlParams.LlmThreads;
             _maxTokenLengthCap = mlParams.MaxTokenLengthCap;
             _minTokenLengthCap = mlParams.MinTokenLengthCap;
-            
+
             _dataDir = systemParams.DataDir;
             _llmEncryptKey = systemParams.LLMEncryptKey;
 
@@ -175,7 +175,7 @@ namespace NetworkMonitor.Search.Services
         }
 
         // Restore a snapshot for the given indices
-        public async Task<ResultObj> RestoreSnapshotAsync(string snapshotRepo, string snapshotName, string indices )
+        public async Task<ResultObj> RestoreSnapshotAsync(string snapshotRepo, string snapshotName, string indices)
         {
             var result = new ResultObj();
             try
@@ -1113,23 +1113,23 @@ namespace NetworkMonitor.Search.Services
                     switch (historyStoreRequest.Operation)
                     {
                         case HistoryStoreOperation.upsert:
-                        {
-                            int padTokens = _minTokenLengthCap > 0 ? _minTokenLengthCap : 256;
-                            var upsert = await _openSearchHelper.UpsertHistoryTurnsAsync(historyStoreRequest, padTokens, MemoryTurnsIndex);
-                            response.Success = upsert.Success;
-                            response.Message = upsert.Message;
-                            break;
-                        }
+                            {
+                                int padTokens = _minTokenLengthCap > 0 ? _minTokenLengthCap : 256;
+                                var upsert = await _openSearchHelper.UpsertHistoryTurnsAsync(historyStoreRequest, padTokens, MemoryTurnsIndex);
+                                response.Success = upsert.Success;
+                                response.Message = upsert.Message;
+                                break;
+                            }
                         case HistoryStoreOperation.delete:
-                        {
-                            var delete = await _openSearchHelper.DeleteHistoryTurnsBySessionAsync(
-                                historyStoreRequest.SessionId,
-                                historyStoreRequest.ServiceId,
-                                MemoryTurnsIndex);
-                            response.Success = delete.Success;
-                            response.Message = delete.Message;
-                            break;
-                        }
+                            {
+                                var delete = await _openSearchHelper.DeleteHistoryTurnsBySessionAsync(
+                                    historyStoreRequest.SessionId,
+                                    historyStoreRequest.ServiceId,
+                                    MemoryTurnsIndex);
+                                response.Success = delete.Success;
+                                response.Message = delete.Message;
+                                break;
+                            }
                         default:
                             response.Success = true;
                             response.Message = $"Operation '{historyStoreRequest.Operation}' acknowledged but not implemented for OpenSearch history mirror.";
