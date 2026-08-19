@@ -7,11 +7,11 @@ ARG TARGETARCH
 WORKDIR /app
 # Search model and content assets are large and rarely change.  Copy them before
 # dependency payloads so a package change cannot invalidate this 1.2 GB layer.
-COPY layers/${TARGETARCH}/content/ ./
-COPY layers/${TARGETARCH}/native/ ./
-COPY layers/${TARGETARCH}/dependencies/ ./
-COPY layers/${TARGETARCH}/networkmonitor/ ./
-COPY layers/${TARGETARCH}/networkmonitordata/ ./
-COPY layers/${TARGETARCH}/application/ ./
+COPY --link layers/${TARGETARCH}/content/ ./
+COPY --link layers/${TARGETARCH}/native/ ./
+COPY --link layers/${TARGETARCH}/dependencies/ ./
+COPY --link layers/${TARGETARCH}/networkmonitor/ ./
+COPY --link layers/${TARGETARCH}/networkmonitordata/ ./
+COPY --link layers/${TARGETARCH}/application/ ./
 USER 1654
 ENTRYPOINT ["dotnet", "NetworkMonitorSearch.dll"]
