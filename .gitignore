@@ -359,3 +359,8 @@ appsettings*
 .cache
 venv
 .env
+# Local AI tool state
+/.codex/
+/.qwen/
+/.gemini/
+/.pi/
