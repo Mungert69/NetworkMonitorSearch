@@ -40,6 +40,9 @@ case "$MODE" in
     ;;
   *) echo "Unknown build mode: $MODE (expected push or local)" >&2; exit 1 ;;
 esac
+if [ "$MODE" = push ]; then
+  sh ../NetworkMonitor/verify-buildx-arm64
+fi
 echo "Building $build_description image $IMAGE with ASP.NET $ASPNET_VERSION"
 if [ "${ALLOW_TEST_FAILURES:-false}" = true ]; then dotnet test --nologo || true; else dotnet test --nologo; fi
 rm -rf "$CONTEXT_DIR"
