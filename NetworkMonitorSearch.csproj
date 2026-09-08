@@ -36,6 +36,13 @@
     <ContainerRepository>mungert/networkmonitorsearch</ContainerRepository>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(Configuration)'=='Release' AND '$(_IsPublishing)'=='true'">
+    <PublishReadyToRun>true</PublishReadyToRun>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release-Dev' AND '$(_IsPublishing)'=='true'">
+    <PublishReadyToRun>true</PublishReadyToRun>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" Version="3.36.1" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.29.0" />
