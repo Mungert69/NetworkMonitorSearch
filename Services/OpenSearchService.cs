@@ -636,14 +636,6 @@ namespace NetworkMonitor.Search.Services
             var request = queryIndexRequest ?? new QueryIndexRequest();
             request.Success = false;
 
-            if (EncryptHelper.IsBadKey(_llmEncryptKey, request.AuthKey, request.AppID))
-            {
-                //result.Success = false;
-                result.Message += $" Error : Failed QueryIndexAsync bad AuthKey for AppID {request.AppID}";
-                _logger.LogError(result.Message);
-                return result;
-            }
-
             if (string.IsNullOrWhiteSpace(request.IndexName))
             {
                 result.Message += "Error: indexName is null or empty.";
@@ -1084,13 +1076,6 @@ namespace NetworkMonitor.Search.Services
             if (historyStoreRequest == null)
             {
                 result.Message += "Error: historyStoreRequest is null.";
-                return result;
-            }
-
-            if (EncryptHelper.IsBadKey(_llmEncryptKey, historyStoreRequest.AuthKey, historyStoreRequest.AppID))
-            {
-                result.Message += $"Error: bad AuthKey for AppID {historyStoreRequest.AppID}.";
-                _logger.LogError(result.Message);
                 return result;
             }
 

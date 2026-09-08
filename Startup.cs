@@ -18,6 +18,7 @@ using Microsoft.Extensions.Logging;
 using NetworkMonitor.Utils.Helpers;
 using System.Net.Http;
 using NetworkMonitor.Objects;
+using NetworkMonitor.Objects.ServiceMessage;
 
 
 namespace NetworkMonitor.Search
@@ -51,7 +52,12 @@ namespace NetworkMonitor.Search
 
             services.Configure<HostOptions>(s => s.ShutdownTimeout = TimeSpan.FromSeconds(30));
             services.AddSingleton(_cancellationTokenSource);
-            services.AddSingleton<IRabbitRepo, RabbitRepo>();
+            services.AddSingleton<RabbitRepo>();
+            services.AddSingleton<IBackendMessageHmacService, BackendMessageHmacService>();
+            services.AddSingleton<ILlmMessageHmacService, LlmMessageHmacService>();
+            services.AddSingleton<IRabbitRepo>(sp => new BackendHmacRabbitRepo(
+                new LlmHmacRabbitRepo(sp.GetRequiredService<RabbitRepo>(), sp.GetRequiredService<ILlmMessageHmacService>()),
+                sp.GetRequiredService<IBackendMessageHmacService>()));
             services.AddSingleton<IRabbitListener, RabbitListener>();
             services.AddSingleton<ISystemParamsHelper, SystemParamsHelper>();
             services.AddSingleton<IOpenSearchService, OpenSearchService>();

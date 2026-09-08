@@ -8,6 +8,7 @@ using Newtonsoft.Json;
 using System.Text;
 using NetworkMonitor.Objects;
 using NetworkMonitor.Objects.Repository;
+using NetworkMonitor.Objects.ServiceMessage;
 using NetworkMonitor.Utils.Helpers;
 
 namespace NetworkMonitor.Search.Services
@@ -30,11 +31,15 @@ namespace NetworkMonitor.Search.Services
     public class RabbitListener : RabbitListenerBase, IRabbitListener
     {
         private readonly IOpenSearchService _openSearchService;
+        private readonly IBackendMessageHmacService? _backendMessageHmacService;
+        private readonly ILlmMessageHmacService? _llmMessageHmacService;
 
-        public RabbitListener(IOpenSearchService openSearchService, ILogger<RabbitListenerBase> logger, SystemParams systemParams)
+        public RabbitListener(IOpenSearchService openSearchService, ILogger<RabbitListenerBase> logger, SystemParams systemParams, IBackendMessageHmacService? backendMessageHmacService = null, ILlmMessageHmacService? llmMessageHmacService = null)
             : base(logger, DeriveSystemUrl(systemParams))
         {
             _openSearchService = openSearchService;
+            _backendMessageHmacService = backendMessageHmacService;
+            _llmMessageHmacService = llmMessageHmacService;
         }
 
         private static SystemUrl DeriveSystemUrl(SystemParams systemParams)
@@ -181,6 +186,7 @@ namespace NetworkMonitor.Search.Services
                 result.Message += "Error: createIndexRequest is null.";
                 return result;
             }
+            if (!await ValidateBackendHmacAsync(result, "createIndex", createIndexRequest)) return result;
 
             try
             {
@@ -219,6 +225,7 @@ namespace NetworkMonitor.Search.Services
                 result.Message += "Error: queryIndexRequest is null.";
                 return result;
             }
+            if (!await ValidateLlmHmacAsync(result, "queryIndex", queryIndexRequest, queryIndexRequest.AppID)) return result;
 
             try
             {
@@ -275,6 +282,7 @@ namespace NetworkMonitor.Search.Services
                 result.Message += "Error: historyStoreRequest is null.";
                 return result;
             }
+            if (!await ValidateLlmHmacAsync(result, "historyStore", historyStoreRequest)) return result;
 
             try
             {
@@ -358,6 +366,7 @@ namespace NetworkMonitor.Search.Services
                 result.Message += "Error: createSnapshotRequest is null.";
                 return result;
             }
+            if (!await ValidateBackendHmacAsync(result, "createSnapshot", createSnapshotRequest)) return result;
 
             try
             {
@@ -379,6 +388,37 @@ namespace NetworkMonitor.Search.Services
                 _logger.LogError(result.Message);
             }
             return result;
+        }
+
+        private async Task<bool> ValidateBackendHmacAsync(ResultObj result, string operation, IBackendSignedMessage message)
+        {
+            if (_backendMessageHmacService != null &&
+                await _backendMessageHmacService.VerifyAsync(operation, operation, message).ConfigureAwait(false))
+            {
+                return true;
+            }
+
+            result.Success = false;
+            result.Message += $"Error: Invalid backend HMAC for {operation}.";
+            _logger.LogWarning("Rejected RabbitMQ operation {Operation}: invalid backend HMAC.", operation);
+            return false;
+        }
+
+        private Task<bool> ValidateLlmHmacAsync(ResultObj result, string operation, IBackendSignedMessage message) =>
+            ValidateLlmHmacAsync(result, operation, message, operation);
+
+        private async Task<bool> ValidateLlmHmacAsync(ResultObj result, string operation, IBackendSignedMessage message, string target)
+        {
+            if (_llmMessageHmacService != null &&
+                await _llmMessageHmacService.VerifyAsync(operation, target, message).ConfigureAwait(false))
+            {
+                return true;
+            }
+
+            result.Success = false;
+            result.Message += $"Error: Invalid LLM-domain HMAC for {operation}.";
+            _logger.LogWarning("Rejected RabbitMQ operation {Operation}: invalid LLM-domain HMAC.", operation);
+            return false;
         }
 
     }
