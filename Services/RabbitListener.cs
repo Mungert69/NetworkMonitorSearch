@@ -392,7 +392,8 @@ namespace NetworkMonitor.Search.Services
 
         private async Task<bool> ValidateBackendHmacAsync(ResultObj result, string operation, IBackendSignedMessage message)
         {
-            if (_backendMessageHmacService != null &&
+            if (MessageSecurityPolicyRegistry.Requires(operation, operation, MessageProtection.BackendHmac) &&
+                _backendMessageHmacService != null &&
                 await _backendMessageHmacService.VerifyAsync(operation, operation, message).ConfigureAwait(false))
             {
                 return true;
@@ -409,7 +410,8 @@ namespace NetworkMonitor.Search.Services
 
         private async Task<bool> ValidateLlmHmacAsync(ResultObj result, string operation, IBackendSignedMessage message, string target)
         {
-            if (_llmMessageHmacService != null &&
+            if (MessageSecurityPolicyRegistry.Requires(operation, target, MessageProtection.LlmHmac) &&
+                _llmMessageHmacService != null &&
                 await _llmMessageHmacService.VerifyAsync(operation, target, message).ConfigureAwait(false))
             {
                 return true;
