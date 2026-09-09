@@ -31,10 +31,10 @@ namespace NetworkMonitor.Search.Services
     public class RabbitListener : RabbitListenerBase, IRabbitListener
     {
         private readonly IOpenSearchService _openSearchService;
-        private readonly IBackendMessageHmacService? _backendMessageHmacService;
-        private readonly ILlmMessageHmacService? _llmMessageHmacService;
+        private readonly IBackendMessageHmacService _backendMessageHmacService;
+        private readonly ILlmMessageHmacService _llmMessageHmacService;
 
-        public RabbitListener(IOpenSearchService openSearchService, ILogger<RabbitListenerBase> logger, SystemParams systemParams, IBackendMessageHmacService? backendMessageHmacService = null, ILlmMessageHmacService? llmMessageHmacService = null)
+        public RabbitListener(IOpenSearchService openSearchService, ILogger<RabbitListenerBase> logger, SystemParams systemParams, IBackendMessageHmacService backendMessageHmacService, ILlmMessageHmacService llmMessageHmacService)
             : base(logger, DeriveSystemUrl(systemParams))
         {
             _openSearchService = openSearchService;
@@ -255,6 +255,7 @@ namespace NetworkMonitor.Search.Services
                 result.Message += "Error: memoryQueryRequest is null.";
                 return result;
             }
+            if (!await ValidateLlmHmacAsync(result, "queryMemory", memoryQueryRequest, memoryQueryRequest.AppID)) return result;
 
             try
             {
@@ -311,6 +312,7 @@ namespace NetworkMonitor.Search.Services
                 result.Message += "Error: request is null.";
                 return result;
             }
+            if (!await ValidateLlmHmacAsync(result, "queryMemoryTurnWindow", request, request.AppID)) return result;
 
             try
             {
@@ -338,6 +340,7 @@ namespace NetworkMonitor.Search.Services
                 result.Message += "Error: request is null.";
                 return result;
             }
+            if (!await ValidateLlmHmacAsync(result, "queryMemoryTurnRange", request, request.AppID)) return result;
 
             try
             {
@@ -393,7 +396,6 @@ namespace NetworkMonitor.Search.Services
         private async Task<bool> ValidateBackendHmacAsync(ResultObj result, string operation, IBackendSignedMessage message)
         {
             if (MessageSecurityPolicyRegistry.Requires(operation, operation, MessageProtection.BackendHmac) &&
-                _backendMessageHmacService != null &&
                 await _backendMessageHmacService.VerifyAsync(operation, operation, message).ConfigureAwait(false))
             {
                 return true;
@@ -411,7 +413,6 @@ namespace NetworkMonitor.Search.Services
         private async Task<bool> ValidateLlmHmacAsync(ResultObj result, string operation, IBackendSignedMessage message, string target)
         {
             if (MessageSecurityPolicyRegistry.Requires(operation, target, MessageProtection.LlmHmac) &&
-                _llmMessageHmacService != null &&
                 await _llmMessageHmacService.VerifyAsync(operation, target, message).ConfigureAwait(false))
             {
                 return true;
