@@ -11,7 +11,7 @@
 
     <PublishProfile>DefaultContainer</PublishProfile>
     <ContainerBaseImage>mcr.microsoft.com/dotnet/aspnet:10.0</ContainerBaseImage>
-    <ContainerImageTag>0.7.8</ContainerImageTag>
+    <ContainerImageTag>0.7.9</ContainerImageTag>
     <ContainerImageFormat>OCI</ContainerImageFormat>
 
     <RollForward>Minor</RollForward>
