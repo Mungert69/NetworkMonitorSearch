@@ -45,7 +45,7 @@
 
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" Version="3.36.1" />
-    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.29.0" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.30.0" />
     <PackageReference Include="NEST" Version="7.17.5" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="OpenSearch.Client" Version="2.1.0" />
