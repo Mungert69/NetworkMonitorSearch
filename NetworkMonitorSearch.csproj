@@ -10,7 +10,6 @@
     <ContainerRuntimeIdentifiers>linux-x64;linux-arm64</ContainerRuntimeIdentifiers>
 
     <PublishProfile>DefaultContainer</PublishProfile>
-    <ContainerBaseImage>mcr.microsoft.com/dotnet/aspnet:10.0</ContainerBaseImage>
     <ContainerImageTag>0.7.9</ContainerImageTag>
     <ContainerImageFormat>OCI</ContainerImageFormat>
 
@@ -89,5 +88,18 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
+
+
+  <!-- Match SDK-published containers to the local ASP.NET Core runtime. -->
+  <Target Name="SelectLocalContainerRuntime" BeforeTargets="ComputeContainerBaseImage">
+    <Exec Command="dotnet --list-runtimes | awk '$1 == &quot;Microsoft.AspNetCore.App&quot; { print $2 }' | sort -V | tail -n1"
+          ConsoleToMSBuild="true" StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="LocalAspNetVersion" />
+    </Exec>
+    <Error Condition="'$(LocalAspNetVersion)' == ''" Text="No local ASP.NET Core runtime found by dotnet --list-runtimes." />
+    <PropertyGroup>
+      <ContainerBaseImage>mcr.microsoft.com/dotnet/aspnet:$(LocalAspNetVersion)</ContainerBaseImage>
+    </PropertyGroup>
+  </Target>
 
 </Project>

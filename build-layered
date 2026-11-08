@@ -18,8 +18,8 @@ REPO=$(awk -v cfg="$CONFIG" '
 ' "$PROJECT")
 [ -n "${REPO:-}" ] || { echo "No ContainerRepository found for $CONFIG" >&2; exit 1; }
 IMAGE="$REPO:$TAG"
-ASPNET_VERSION=$(dotnet --info | awk '/^Host:/ { host=1; next } host && /^[[:space:]]*Version:/ { print $2; exit }')
-: "${ASPNET_VERSION:?Could not determine Host version from dotnet --info}"
+ASPNET_VERSION=$(dotnet --list-runtimes | awk '$1 == "Microsoft.AspNetCore.App" { print $2 }' | sort -V | tail -n1)
+: "${ASPNET_VERSION:?No local ASP.NET Core runtime found by dotnet --list-runtimes}"
 case "$MODE" in
   push)
     mappings="amd64:linux-x64 arm64:linux-arm64"
