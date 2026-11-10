@@ -1,6 +1,5 @@
-#!/bin/sh
-set -eu
-( set -o pipefail ) 2>/dev/null && set -o pipefail
+#!/usr/bin/env bash
+set -euo pipefail
 CONFIG=${1:?Configuration is required}
 MODE=${2:-push}
 APP_NAME=NetworkMonitorSearch
