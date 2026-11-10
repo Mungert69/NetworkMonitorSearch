@@ -1,10 +1,42 @@
 # syntax=docker/dockerfile:1.6
 
-ARG ASPNET_VERSION
-FROM mcr.microsoft.com/dotnet/aspnet:${ASPNET_VERSION}
+FROM debian:trixie-slim
 
 ARG TARGETARCH
+ARG ASPNET_VERSION
 WORKDIR /app
+
+ENV DOTNET_RUNNING_IN_CONTAINER=true \
+    DOTNET_ROOT=/usr/share/dotnet \
+    PATH="/usr/share/dotnet:${PATH}"
+
+RUN set -eux; \
+    : "${ASPNET_VERSION:?ASPNET_VERSION must be supplied with --build-arg}"; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      ca-certificates curl openssl \
+      libc6 libgcc-s1 libicu76 libssl3t64 libstdc++6 \
+      tzdata tzdata-legacy; \
+    rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) dotnet_arch=x64 ;; \
+      arm64) dotnet_arch=arm64 ;; \
+      *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh; \
+    chmod +x /tmp/dotnet-install.sh; \
+    /tmp/dotnet-install.sh --install-dir "${DOTNET_ROOT}" --runtime aspnetcore \
+      --version "${ASPNET_VERSION}" --architecture "${dotnet_arch}"; \
+    rm -f /tmp/dotnet-install.sh; \
+    dotnet --info; \
+    openssl version; \
+    openssl list -signature-algorithms | grep -q 'ML-DSA-65'
+
+RUN groupadd --gid 1654 app \
+ && useradd --uid 1654 --gid 1654 --create-home --shell /usr/sbin/nologin app
+
 # Search model and content assets are large and rarely change.  Copy them before
 # dependency payloads so a package change cannot invalidate this 1.2 GB layer.
 COPY --link layers/${TARGETARCH}/content/ ./
