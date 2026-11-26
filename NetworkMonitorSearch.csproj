@@ -9,7 +9,7 @@
     <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
     <ContainerRuntimeIdentifiers>linux-x64;linux-arm64</ContainerRuntimeIdentifiers>
 
-    <ContainerImageTag>0.8.0</ContainerImageTag>
+    <ContainerImageTag>0.8.1</ContainerImageTag>
     <ContainerImageFormat>OCI</ContainerImageFormat>
 
     <RollForward>Minor</RollForward>
